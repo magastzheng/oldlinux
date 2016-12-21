@@ -8,11 +8,15 @@
 #include <sys/stat.h>
 
 #include <linux/sched.h>
+#include <linux/minix_fs.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <asm/system.h>
 
 struct inode inode_table[NR_INODE]={{0,},};
+
+extern void minix_read_inode(struct inode * inode);
+extern void minix_write_inode(struct inode * inode);
 
 static inline void wait_on_inode(struct inode * inode)
 {
@@ -44,34 +48,20 @@ static void write_inode(struct inode * inode)
 		unlock_inode(inode);
 		return;
 	}
-	if (inode->i_op && inode->i_op->write_inode)
-		inode->i_op->write_inode(inode);
+	minix_write_inode(inode);
 	unlock_inode(inode);
 }
 
 static void read_inode(struct inode * inode)
 {
 	lock_inode(inode);
-	if (inode->i_sb && inode->i_sb->s_op && inode->i_sb->s_op->read_inode)
-		inode->i_sb->s_op->read_inode(inode);
+	minix_read_inode(inode);
 	unlock_inode(inode);
 }
 
-/*
- * bmap is needed for demand-loading and paging: if this function
- * doesn't exist for a filesystem, then those things are impossible:
- * executables cannot be run from the filesystem etc...
- *
- * This isn't as bad as it sounds: the read-routines might still work,
- * so the filesystem would be otherwise ok (for example, you might have
- * a DOS filesystem, which doesn't lend itself to bmap very well, but
- * you could still transfer files to/from the filesystem)
- */
 int bmap(struct inode * inode, int block)
 {
-	if (inode->i_op && inode->i_op->bmap)
-		return inode->i_op->bmap(inode,block);
-	return 0;
+	return minix_bmap(inode,block);
 }
 
 void invalidate_inodes(int dev)
@@ -83,10 +73,8 @@ void invalidate_inodes(int dev)
 	for(i=0 ; i<NR_INODE ; i++,inode++) {
 		wait_on_inode(inode);
 		if (inode->i_dev == dev) {
-			if (inode->i_count) {
+			if (inode->i_count)
 				printk("inode in use on removed disk\n\r");
-				continue;
-			}
 			inode->i_dev = inode->i_dirt = 0;
 		}
 	}
@@ -137,8 +125,8 @@ repeat:
 		return;
 	}
 	if (!inode->i_nlink) {
-		if (inode->i_op && inode->i_op->put_inode)
-			inode->i_op->put_inode(inode);
+		minix_truncate(inode);
+		minix_free_inode(inode);
 		return;
 	}
 	if (inode->i_dirt) {

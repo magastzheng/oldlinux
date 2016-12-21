@@ -1,17 +1,10 @@
-#
-# Makefile for the linux memory manager.
-#
-# Note! Dependencies are done automagically by 'make dep', which also
-# removes any old dependencies. DON'T put your own dependencies here
-# unless it's something special (ie not a .c file).
-#
-# Note 2! The CFLAGS definition is now in the main makefile...
-
+CC	=gcc
+CFLAGS	=-O -Wall -fstrength-reduce -fomit-frame-pointer \
+	-finline-functions -nostdinc -I../include
 AS	=as
 AR	=ar
 LD	=ld
-CC	=gcc -nostdinc -I../include
-CPP	=cpp -nostdinc -I../include
+CPP	=gcc -E -nostdinc -I../include
 
 .c.o:
 	$(CC) $(CFLAGS) \
@@ -23,6 +16,8 @@ CPP	=cpp -nostdinc -I../include
 	-S -o $*.s $<
 
 OBJS	= memory.o swap.o
+
+all: mm.o
 
 mm.o: $(OBJS)
 	$(LD) -r -o mm.o $(OBJS)
@@ -39,12 +34,11 @@ dep:
 ### Dependencies:
 memory.o : memory.c ../include/signal.h ../include/sys/types.h \
   ../include/asm/system.h ../include/linux/sched.h ../include/linux/head.h \
-  ../include/linux/fs.h ../include/sys/dirent.h ../include/limits.h \
-  ../include/linux/mm.h ../include/linux/kernel.h ../include/sys/param.h \
-  ../include/sys/time.h ../include/time.h ../include/sys/resource.h 
+  ../include/linux/fs.h ../include/linux/mm.h ../include/linux/kernel.h \
+  ../include/sys/param.h ../include/sys/time.h ../include/time.h \
+  ../include/sys/resource.h 
 swap.o : swap.c ../include/string.h ../include/errno.h \
   ../include/linux/mm.h ../include/linux/fs.h ../include/sys/types.h \
-  ../include/sys/dirent.h ../include/limits.h ../include/linux/kernel.h \
-  ../include/signal.h ../include/sys/stat.h ../include/linux/sched.h \
-  ../include/linux/head.h ../include/sys/param.h ../include/sys/time.h \
-  ../include/time.h ../include/sys/resource.h 
+  ../include/linux/kernel.h ../include/signal.h ../include/sys/stat.h \
+  ../include/linux/sched.h ../include/linux/head.h ../include/sys/param.h \
+  ../include/sys/time.h ../include/time.h ../include/sys/resource.h 

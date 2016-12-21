@@ -78,11 +78,10 @@ extern int * blk_size[NR_BLK_DEV];
 #define DEVICE_OFF(device) floppy_off(DEVICE_NR(device))
 
 #elif (MAJOR_NR == 3)
-/* harddisk: timeout is 6 seconds.. */
+/* harddisk */
 #define DEVICE_NAME "harddisk"
 #define DEVICE_INTR do_hd
 #define DEVICE_TIMEOUT HD_TIMER
-#define TIMEOUT_VALUE 600
 #define DEVICE_REQUEST do_hd_request
 #define DEVICE_NR(device) (MINOR(device)>>6)
 #define DEVICE_ON(device)
@@ -101,24 +100,11 @@ extern int * blk_size[NR_BLK_DEV];
 void (*DEVICE_INTR)(void) = NULL;
 #endif
 #ifdef DEVICE_TIMEOUT
-
-#define SET_TIMER \
-((timer_table[DEVICE_TIMEOUT].expires = jiffies + TIMEOUT_VALUE), \
-(timer_active |= 1<<DEVICE_TIMEOUT))
-
-#define CLEAR_TIMER \
-timer_active &= ~(1<<DEVICE_TIMEOUT)
-
-#define SET_INTR(x) \
-if (DEVICE_INTR = (x)) \
-	SET_TIMER; \
-else \
-	CLEAR_TIMER;
-
+#define SET_INTR(x) (DEVICE_INTR = (x), \
+	timer_table[DEVICE_TIMEOUT].expires = jiffies + 200, \
+	timer_active |= 1<<DEVICE_TIMEOUT)
 #else
-
 #define SET_INTR(x) (DEVICE_INTR = (x))
-
 #endif
 static void (DEVICE_REQUEST)(void);
 
@@ -148,16 +134,23 @@ extern inline void end_request(int uptodate)
 	CURRENT = CURRENT->next;
 }
 
-#ifdef DEVICE_INTR
-#define CLEAR_INTR SET_INTR(NULL)
+#ifdef DEVICE_TIMEOUT
+#define CLEAR_DEVICE_TIMEOUT timer_active &= ~(1<<DEVICE_TIMEOUT);
 #else
-#define CLEAR_INTR
+#define CLEAR_DEVICE_TIMEOUT
+#endif
+
+#ifdef DEVICE_INTR
+#define CLEAR_DEVICE_INTR DEVICE_INTR = 0;
+#else
+#define CLEAR_DEVICE_INTR
 #endif
 
 #define INIT_REQUEST \
 repeat: \
 	if (!CURRENT) {\
-		CLEAR_INTR; \
+		CLEAR_DEVICE_INTR \
+		CLEAR_DEVICE_TIMEOUT \
 		return; \
 	} \
 	if (MAJOR(CURRENT->dev) != MAJOR_NR) \

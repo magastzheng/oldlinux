@@ -15,6 +15,10 @@
 #include <const.h>
 #include <sys/stat.h>
 
+extern int permission(struct inode * inode,int mask);
+extern struct inode * _namei(const char * filename, struct inode * base,
+	int follow_links);
+
 /*
  * comment out this line if you want names > MINIX_NAME_LEN chars to be
  * truncated. Else they will be disallowed.
@@ -85,7 +89,7 @@ static struct buffer_head * minix_find_entry(struct inode * dir,
 		if ((char *)de >= BLOCK_SIZE+bh->b_data) {
 			brelse(bh);
 			bh = NULL;
-			if (!(block = minix_bmap(dir,i/MINIX_DIR_ENTRIES_PER_BLOCK)) ||
+			if (!(block = bmap(dir,i/MINIX_DIR_ENTRIES_PER_BLOCK)) ||
 			    !(bh = bread(dir->i_dev,block))) {
 				i += MINIX_DIR_ENTRIES_PER_BLOCK;
 				continue;
@@ -394,7 +398,7 @@ static int empty_dir(struct inode * inode)
 	while (nr<len) {
 		if ((void *) de >= (void *) (bh->b_data+BLOCK_SIZE)) {
 			brelse(bh);
-			block = minix_bmap(inode,nr/MINIX_DIR_ENTRIES_PER_BLOCK);
+			block=bmap(inode,nr/MINIX_DIR_ENTRIES_PER_BLOCK);
 			if (!block) {
 				nr += MINIX_DIR_ENTRIES_PER_BLOCK;
 				continue;

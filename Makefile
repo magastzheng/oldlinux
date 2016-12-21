@@ -1,44 +1,7 @@
 #
-# comment this line if you don't want the emulation-code
-#
-
-MATH_EMULATION = -DKERNEL_MATH_EMULATION
-
-#
-# uncomment the correct keyboard:
-#
-
-# KEYBOARD = -DKBD_FINNISH
-KEYBOARD = -DKBD_US
-# KEYBOARD = -DKBD_GR
-# KEYBOARD = -DKBD_FR
-# KEYBOARD = -DKBD_UK
-# KEYBOARD = -DKBD_DK
-
-#
-# uncomment this line if you are using gcc-1.40
-#
-#GCC_OPT = -fcombine-regs -fstrength-reduce
-
-#
-# standard CFLAGS
-#
-
-CFLAGS =-Wall -O6 -fomit-frame-pointer $(GCC_OPT)
-
-#
-# ROOT_DEV specifies the default root-device when making the image.
-# This can be either FLOPPY, /dev/xxxx or empty, in which case the
-# default of FLOPPY is used by 'build'.
-#
-
-# ROOT_DEV = /dev/hdb1
-
-#
 # if you want the ram-disk device, define this to be the
 # size in blocks.
 #
-
 #RAMDISK = -DRAMDISK=512
 
 AS86	=as86 -0 -a
@@ -46,11 +9,17 @@ LD86	=ld86 -0
 
 AS	=as
 LD	=ld
-#LDFLAGS	=-s -x -M
-LDFLAGS	= -M
+LDFLAGS	=-s -x -M
 CC	=gcc $(RAMDISK)
-MAKE	=make CFLAGS="$(CFLAGS)"
+CFLAGS	=-Wall -O -fstrength-reduce -fomit-frame-pointer
 CPP	=cpp -nostdinc -Iinclude
+
+#
+# ROOT_DEV specifies the default root-device when making the image.
+# This can be either FLOPPY, /dev/xxxx or empty, in which case the
+# default of FLOPPY is used by 'build'.
+#
+ROOT_DEV=/dev/hdb1
 
 ARCHIVES	=kernel/kernel.o mm/mm.o fs/fs.o
 FILESYSTEMS	=fs/minix/minix.o
@@ -67,19 +36,10 @@ LIBS		=lib/lib.a
 	$(CC) $(CFLAGS) \
 	-nostdinc -Iinclude -c -o $*.o $<
 
-all:	Version Image
-
-Version:
-	@./makever.sh
-	@echo \#define UTS_RELEASE \"0.95c-`cat .version`\" > include/linux/config_rel.h
-	@echo \#define UTS_VERSION \"`date +%D`\" > include/linux/config_ver.h
-	touch include/linux/config.h
+all:	Image
 
 Image: boot/bootsect boot/setup tools/system tools/build
-	cp tools/system system.tmp
-	strip system.tmp
-	tools/build boot/bootsect boot/setup system.tmp $(ROOT_DEV) > Image
-	rm system.tmp
+	tools/build boot/bootsect boot/setup tools/system $(ROOT_DEV) > Image
 	sync
 
 disk: Image
@@ -101,29 +61,29 @@ tools/system:	boot/head.o init/main.o \
 	$(LIBS) \
 	-o tools/system > System.map
 
-kernel/math/math.a: dummy
-	(cd kernel/math; $(MAKE) MATH_EMULATION="$(MATH_EMULATION)")
+kernel/math/math.a:
+	(cd kernel/math; make)
 
-kernel/blk_drv/blk_drv.a: dummy
-	(cd kernel/blk_drv; $(MAKE))
+kernel/blk_drv/blk_drv.a:
+	(cd kernel/blk_drv; make)
 
-kernel/chr_drv/chr_drv.a: dummy
-	(cd kernel/chr_drv; $(MAKE) KEYBOARD="$(KEYBOARD)")
+kernel/chr_drv/chr_drv.a:
+	(cd kernel/chr_drv; make)
 
-kernel/kernel.o: dummy
-	(cd kernel; $(MAKE))
+kernel/kernel.o:
+	(cd kernel; make)
 
-mm/mm.o: dummy
-	(cd mm; $(MAKE))
+mm/mm.o:
+	(cd mm; make)
 
-fs/fs.o: dummy
-	(cd fs; $(MAKE))
+fs/fs.o:
+	(cd fs; make)
 
-fs/minix/minix.o: dummy
-	(cd fs/minix; $(MAKE))
+fs/minix/minix.o:
+	(cd fs/minix; make)
 
-lib/lib.a: dummy
-	(cd lib; $(MAKE))
+lib/lib.a:
+	(cd lib; make)
 
 boot/setup: boot/setup.s
 	$(AS86) -o boot/setup.o boot/setup.s
@@ -160,14 +120,12 @@ dep:
 	(cd kernel; make dep)
 	(cd mm; make dep)
 
-dummy:
-
 ### Dependencies:
 init/main.o : init/main.c include/unistd.h include/sys/stat.h \
   include/sys/types.h include/sys/time.h include/time.h include/sys/times.h \
   include/sys/utsname.h include/sys/param.h include/sys/resource.h \
   include/utime.h include/linux/tty.h include/termios.h include/linux/sched.h \
-  include/linux/head.h include/linux/fs.h include/sys/dirent.h \
-  include/limits.h include/linux/mm.h include/linux/kernel.h include/signal.h \
-  include/asm/system.h include/asm/io.h include/stddef.h include/stdarg.h \
-  include/fcntl.h include/string.h 
+  include/linux/head.h include/linux/fs.h include/linux/mm.h \
+  include/linux/kernel.h include/signal.h include/asm/system.h \
+  include/asm/io.h include/stddef.h include/stdarg.h include/fcntl.h \
+  include/string.h 

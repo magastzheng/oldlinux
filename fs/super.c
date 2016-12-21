@@ -29,26 +29,7 @@ struct super_block super_block[NR_SUPER];
 /* this is initialized in init/main.c */
 int ROOT_DEV = 0;
 
-/* Move into include file later */
-
-static struct file_system_type file_systems[] = {
-	{minix_read_super,"minix"},
-	{NULL,NULL}
-};
-
-/* end of include file */
-
-struct file_system_type *get_fs_type(char *name)
-{
-	int a;
-	
-	for(a = 0 ; file_systems[a].read_super ; a++)
-		if (!strcmp(name,file_systems[a].name))
-			return(&file_systems[a]);
-	return(NULL);
-}
-
-void lock_super(struct super_block * sb)
+static void lock_super(struct super_block * sb)
 {
 	cli();
 	while (sb->s_lock)
@@ -57,7 +38,7 @@ void lock_super(struct super_block * sb)
 	sti();
 }
 
-void free_super(struct super_block * sb)
+static void free_super(struct super_block * sb)
 {
 	cli();
 	sb->s_lock = 0;
@@ -65,7 +46,7 @@ void free_super(struct super_block * sb)
 	sti();
 }
 
-void wait_on_super(struct super_block * sb)
+static void wait_on_super(struct super_block * sb)
 {
 	cli();
 	while (sb->s_lock)
@@ -94,6 +75,7 @@ struct super_block * get_super(int dev)
 void put_super(int dev)
 {
 	struct super_block * sb;
+	int i;
 
 	if (dev == ROOT_DEV) {
 		printk("root diskette changed: prepare for armageddon\n\r");
@@ -105,24 +87,27 @@ void put_super(int dev)
 		printk("Mounted disk changed - tssk, tssk\n\r");
 		return;
 	}
-	if (sb->s_op && sb->s_op->put_super)
-		sb->s_op->put_super(sb);
+	lock_super(sb);
+	sb->s_dev = 0;
+	for(i=0;i<MINIX_I_MAP_SLOTS;i++)
+		brelse(sb->s_imap[i]);
+	for(i=0;i<MINIX_Z_MAP_SLOTS;i++)
+		brelse(sb->s_zmap[i]);
+	free_super(sb);
+	return;
 }
 
-static struct super_block * read_super(int dev,char *name,void *data)
+static struct super_block * read_super(int dev)
 {
 	struct super_block * s;
-	struct file_system_type *type;
+	struct buffer_head * bh;
+	int i,block;
 
 	if (!dev)
 		return NULL;
 	check_disk_change(dev);
 	if (s = get_super(dev))
 		return s;
-	if (!(type=get_fs_type(name))) {
-		printk("get fs type failed %s\n",name);
-		return NULL;
-	}
 	for (s = 0+super_block ;; s++) {
 		if (s >= NR_SUPER+super_block)
 			return NULL;
@@ -130,14 +115,53 @@ static struct super_block * read_super(int dev,char *name,void *data)
 			break;
 	}
 	s->s_dev = dev;
-	if (!type->read_super(s,data))
-		return(NULL);
-	s->s_dev = dev;
+	s->s_mounted = NULL;
 	s->s_covered = NULL;
 	s->s_time = 0;
 	s->s_rd_only = 0;
 	s->s_dirt = 0;
-	return(s);
+	lock_super(s);
+	if (!(bh = bread(dev,1))) {
+		s->s_dev=0;
+		free_super(s);
+		return NULL;
+	}
+	*((struct minix_super_block *) s) =
+		*((struct minix_super_block *) bh->b_data);
+	brelse(bh);
+	if (s->s_magic != MINIX_SUPER_MAGIC) {
+		s->s_dev = 0;
+		free_super(s);
+		return NULL;
+	}
+	for (i=0;i < MINIX_I_MAP_SLOTS;i++)
+		s->s_imap[i] = NULL;
+	for (i=0;i < MINIX_Z_MAP_SLOTS;i++)
+		s->s_zmap[i] = NULL;
+	block=2;
+	for (i=0 ; i < s->s_imap_blocks ; i++)
+		if (s->s_imap[i]=bread(dev,block))
+			block++;
+		else
+			break;
+	for (i=0 ; i < s->s_zmap_blocks ; i++)
+		if (s->s_zmap[i]=bread(dev,block))
+			block++;
+		else
+			break;
+	if (block != 2+s->s_imap_blocks+s->s_zmap_blocks) {
+		for(i=0;i<MINIX_I_MAP_SLOTS;i++)
+			brelse(s->s_imap[i]);
+		for(i=0;i<MINIX_Z_MAP_SLOTS;i++)
+			brelse(s->s_zmap[i]);
+		s->s_dev=0;
+		free_super(s);
+		return NULL;
+	}
+	s->s_imap[0]->b_data[0] |= 1;
+	s->s_zmap[0]->b_data[0] |= 1;
+	free_super(s);
+	return s;
 }
 
 int sys_umount(char * dev_name)
@@ -160,7 +184,7 @@ int sys_umount(char * dev_name)
 		return -ENOENT;
 	if (!sb->s_covered->i_mount)
 		printk("Mounted inode has i_mount=0\n");
-	for (inode = inode_table+0 ; inode < inode_table+NR_INODE ; inode++)
+	for (inode=inode_table+0 ; inode<inode_table+NR_INODE ; inode++)
 		if (inode->i_dev==dev && inode->i_count)
 			if (inode == sb->s_mounted && inode->i_count == 1)
 				continue;
@@ -171,8 +195,8 @@ int sys_umount(char * dev_name)
 	sb->s_covered = NULL;
 	iput(sb->s_mounted);
 	sb->s_mounted = NULL;
-        put_super(dev);
-        sync_dev(dev);
+	put_super(dev);
+	sync_dev(dev);
 	return 0;
 }
 
@@ -200,11 +224,7 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 		iput(dir_i);
 		return -EPERM;
 	}
-	if (dir_i->i_mount) {
-		iput(dir_i);
-		return -EPERM;
-	}
-	if (!(sb=read_super(dev,"minix",NULL))) {
+	if (!(sb=read_super(dev))) {
 		iput(dir_i);
 		return -EBUSY;
 	}
@@ -212,9 +232,17 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 		iput(dir_i);
 		return -EBUSY;
 	}
-	sb->s_covered = dir_i;
-	dir_i->i_mount = 1;
-	dir_i->i_dirt = 1;		/* NOTE! we don't iput(dir_i) */
+	if (dir_i->i_mount) {
+		iput(dir_i);
+		return -EPERM;
+	}
+	if (!(sb->s_mounted = iget(dev,MINIX_ROOT_INO))) {
+		iput(dir_i);
+		return -EPERM;
+	}
+	sb->s_covered=dir_i;
+	dir_i->i_mount=1;
+	dir_i->i_dirt=1;		/* NOTE! we don't iput(dir_i) */
 	return 0;			/* we do that in umount */
 }
 
@@ -237,13 +265,10 @@ void mount_root(void)
 		p->s_lock = 0;
 		p->s_wait = NULL;
 	}
-	if (!(p=read_super(ROOT_DEV,"minix",NULL)))
+	if (!(p=read_super(ROOT_DEV)))
 		panic("Unable to mount root");
- 	/*wait_for_keypress();
 	if (!(mi=iget(ROOT_DEV,MINIX_ROOT_INO)))
 		panic("Unable to read root i-node");
-	wait_for_keypress();*/
-	mi=p->s_mounted;
 	mi->i_count += 3 ;	/* NOTE! it is logically used 4 times, not 1 */
 	p->s_mounted = p->s_covered = mi;
 	current->pwd = mi;

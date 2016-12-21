@@ -26,8 +26,6 @@
 
 int kill_pg(int pgrp, int sig, int priv);
 int is_orphaned_pgrp(int pgrp);
-   
-extern void lp_init(void);   
 
 #define _L_FLAG(tty,f)	((tty)->termios.c_lflag & f)
 #define _I_FLAG(tty,f)	((tty)->termios.c_iflag & f)
@@ -48,7 +46,6 @@ extern void lp_init(void);
 #define I_CRNL(tty)	_I_FLAG((tty),ICRNL)
 #define I_NOCR(tty)	_I_FLAG((tty),IGNCR)
 #define I_IXON(tty)	_I_FLAG((tty),IXON)
-#define I_STRP(tty)	_I_FLAG((tty),ISTRIP)
 
 #define O_POST(tty)	_O_FLAG((tty),OPOST)
 #define O_NLCR(tty)	_O_FLAG((tty),ONLCR)
@@ -86,9 +83,7 @@ int fg_console = 0;
 struct tty_queue * table_list[]={
 	con_queues + 0, con_queues + 1,
 	rs_queues + 0, rs_queues + 1,
-	rs_queues + 3, rs_queues + 4,
-	rs_queues + 6, rs_queues + 7,
-	rs_queues + 9, rs_queues + 10
+	rs_queues + 3, rs_queues + 4
 	};
 
 void change_console(unsigned int new_console)
@@ -127,23 +122,16 @@ void copy_to_cooked(struct tty_struct * tty)
 {
 	unsigned char c;
 
-	if (!(tty && tty->write && tty->read_q &&
-	    tty->write_q && tty->secondary)) {
+	if (!(tty->read_q || tty->write_q || tty->secondary)) {
 		printk("copy_to_cooked: missing queues\n\r");
 		return;
 	}
 	while (1) {
 		if (EMPTY(tty->read_q))
 			break;
-		if (FULL(tty->secondary)) {
-			if (tty->secondary->proc_list)
-				if (tty->secondary->proc_list != current)
-					current->counter = 0;
+		if (FULL(tty->secondary))
 			break;
-		}
 		GETCH(tty->read_q,c);
-		if (I_STRP(tty))
-			c &= 0x7f;
 		if (c==13) {
 			if (I_CRNL(tty))
 				c=10;
@@ -158,14 +146,14 @@ void copy_to_cooked(struct tty_struct * tty)
 			    (c==KILL_CHAR(tty))) {
 				/* deal with killing the input line */
 				while(!(EMPTY(tty->secondary) ||
-					(c=LAST(tty->secondary))==10 ||
-					((EOF_CHAR(tty) != _POSIX_VDISABLE) &&
+				        (c=LAST(tty->secondary))==10 ||
+				        ((EOF_CHAR(tty) != _POSIX_VDISABLE) &&
 					 (c==EOF_CHAR(tty))))) {
 					if (L_ECHO(tty)) {
 						if (c<32)
 							PUTCH(127,tty->write_q);
 						PUTCH(127,tty->write_q);
-						TTY_WRITE_FLUSH(tty);
+						tty->write(tty);
 					}
 					DEC(tty->secondary->head);
 				}
@@ -182,7 +170,7 @@ void copy_to_cooked(struct tty_struct * tty)
 					if (c<32)
 						PUTCH(127,tty->write_q);
 					PUTCH(127,tty->write_q);
-					TTY_WRITE_FLUSH(tty);
+					tty->write(tty);
 				}
 				DEC(tty->secondary->head);
 				continue;
@@ -192,12 +180,13 @@ void copy_to_cooked(struct tty_struct * tty)
 			if ((STOP_CHAR(tty) != _POSIX_VDISABLE) &&
 			    (c==STOP_CHAR(tty))) {
 				tty->stopped=1;
+				tty->write(tty);
 				continue;
 			}
 			if ((START_CHAR(tty) != _POSIX_VDISABLE) &&
 			    (c==START_CHAR(tty))) {
 				tty->stopped=0;
-				TTY_WRITE_FLUSH(tty);
+				tty->write(tty);
 				continue;
 			}
 		}
@@ -220,7 +209,7 @@ void copy_to_cooked(struct tty_struct * tty)
 			}
 		}
 		if (c==10 || (EOF_CHAR(tty) != _POSIX_VDISABLE &&
-		    c==EOF_CHAR(tty)))
+			      c==EOF_CHAR(tty)))
 			tty->secondary->data++;
 		if ((L_ECHO(tty) || L_ECHONL(tty)) && (c==10)) {
 			PUTCH(10,tty->write_q);
@@ -232,14 +221,10 @@ void copy_to_cooked(struct tty_struct * tty)
 			} else
 				PUTCH(c,tty->write_q);
 		}
+		tty->write(tty);
 		PUTCH(c,tty->secondary);
-		TTY_WRITE_FLUSH(tty);
 	}
-	TTY_WRITE_FLUSH(tty);
-	if (!EMPTY(tty->secondary))
-		wake_up(&tty->secondary->proc_list);
-	if (LEFT(tty->write_q) > TTY_BUF_SIZE/2)
-		wake_up(&tty->write_q->proc_list);
+	wake_up(&tty->secondary->proc_list);
 }
 
 /*
@@ -285,8 +270,7 @@ int tty_read(unsigned channel, char * buf, int nr, unsigned short flags)
 	tty = TTY_TABLE(channel);
 	if (!(tty->read_q && tty->secondary))
 		return -EIO;
-	if ((tty->pgrp > 0) && (current->tty == channel) &&
-	    (tty->pgrp != current->pgrp))
+	if ((current->tty == channel) && (tty->pgrp != current->pgrp)) 
 		return(tty_signal(SIGTTIN, tty));
 	if (channel & 0x80)
 		other_tty = tty_table + (channel ^ 0x40);
@@ -308,22 +292,23 @@ int tty_read(unsigned channel, char * buf, int nr, unsigned short flags)
 		time = current->timeout = 0;
 	if (minimum>nr)
 		minimum = nr;
-	TTY_READ_FLUSH(tty);
+	copy_to_cooked(tty);
 	while (nr>0) {
 		if (other_tty && other_tty->write)
-			TTY_WRITE_FLUSH(other_tty);
+			other_tty->write(other_tty);
 		cli();
 		if (EMPTY(tty->secondary) || (L_CANON(tty) &&
 		    !FULL(tty->read_q) && !tty->secondary->data)) {
-			if (!current->timeout)
+			if (!current->timeout ||
+			  (current->signal & ~current->blocked)) {
+			  	sti();
 				break;
-			if (current->signal & ~current->blocked) 
-				break;
+			}
 			if (IS_A_PTY_SLAVE(channel) && C_HUP(other_tty))
 				break;
 			interruptible_sleep_on(&tty->secondary->proc_list);
 			sti();
-			TTY_READ_FLUSH(tty);
+			copy_to_cooked(tty);
 			continue;
 		}
 		sti();
@@ -344,12 +329,11 @@ int tty_read(unsigned channel, char * buf, int nr, unsigned short flags)
 				break;
 		} while (nr>0 && !EMPTY(tty->secondary));
 		wake_up(&tty->read_q->proc_list);
-		if (L_CANON(tty) || b-buf >= minimum)
-			break;
 		if (time)
 			current->timeout = time+jiffies;
+		if (L_CANON(tty) || b-buf >= minimum)
+			break;
 	}
-	sti();
 	current->timeout = 0;
 	if (b-buf)
 		return b-buf;
@@ -371,13 +355,9 @@ int tty_write(unsigned channel, char * buf, int nr)
 	tty = TTY_TABLE(channel);
 	if (!(tty->write_q && tty->write))
 		return -EIO;
-	if (L_TOSTOP(tty) &&  (tty->pgrp > 0) &&
+	if (L_TOSTOP(tty) && 
 	    (current->tty == channel) && (tty->pgrp != current->pgrp)) 
 		return(tty_signal(SIGTTOU, tty));
-	if (nr < 0)
-		return -EINVAL;
-	if (!nr)
-		return 0;
 	while (nr>0) {
 		sleep_if_full(tty->write_q);
 		if (current->signal & ~current->blocked)
@@ -401,15 +381,11 @@ int tty_write(unsigned channel, char * buf, int nr)
 			cr_flag = 0;
 			PUTCH(c,tty->write_q);
 		}
-		TTY_WRITE_FLUSH(tty);
+		tty->write(tty);
 		if (nr>0)
 			schedule();
 	}
-	if (b-buf)
-		return b-buf;
-	if (current->signal & ~current->blocked)
-		return -ERESTARTSYS;
-	return 0;
+	return (b-buf);
 }
 
 void chr_dev_init(void)
@@ -426,14 +402,10 @@ void tty_init(void)
 	rs_queues[1] = (struct tty_queue) {0x3f8,0,0,0,""};
 	rs_queues[3] = (struct tty_queue) {0x2f8,0,0,0,""};
 	rs_queues[4] = (struct tty_queue) {0x2f8,0,0,0,""};
-	rs_queues[6] = (struct tty_queue) {0x3e8,0,0,0,""};
-	rs_queues[7] = (struct tty_queue) {0x3e8,0,0,0,""};
-	rs_queues[9] = (struct tty_queue) {0x2e8,0,0,0,""};
-	rs_queues[10] = (struct tty_queue) {0x2e8,0,0,0,""};
 	for (i=0 ; i<256 ; i++) {
 		tty_table[i] =  (struct tty_struct) {
 		 	{0, 0, 0, 0, 0, INIT_C_CC},
-			-1, 0, 0, 0, {0,0,0,0},
+			0, 0, 0, {0,0,0,0},
 			NULL, NULL, NULL, NULL
 		};
 	}
@@ -446,10 +418,9 @@ void tty_init(void)
 			IXON | ISIG | ICANON | ECHO | ECHOCTL | ECHOKE,
 			0,		/* console termio */
 			INIT_C_CC},
-			-1,		/* initial pgrp */
+			0,			/* initial pgrp */
 			0,			/* initial session */
 			0,			/* initial stopped */
-			0,			/* initial busy */
 			{video_num_lines,video_num_columns,0,0},
 			con_write,
 			con_queues+0+i*3,con_queues+1+i*3,con_queues+2+i*3
@@ -463,7 +434,6 @@ void tty_init(void)
 			0,
 			0,
 			INIT_C_CC},
-			-1,
 			0,
 			0,
 			0,
@@ -480,7 +450,6 @@ void tty_init(void)
 			0,
 			0,
 			INIT_C_CC},
-			-1,
 			0,
 			0,
 			0,
@@ -495,7 +464,6 @@ void tty_init(void)
 			IXON | ISIG | ICANON,
 			0,
 			INIT_C_CC},
-			-1,
 			0,
 			0,
 			0,
@@ -507,5 +475,4 @@ void tty_init(void)
 	rs_init();
 	printk("%d virtual consoles\n\r",NR_CONSOLES);
 	printk("%d pty's\n\r",NR_PTYS);
-	lp_init();
 }

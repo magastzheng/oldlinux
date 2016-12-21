@@ -46,21 +46,12 @@ void show_task(int nr,struct task_struct * p)
 
 void show_state(void)
 {
-	static int lock = 0;
 	int i;
 
-	cli();
-	if (lock) {
-		sti();
-		return;
-	}
-	lock = 1;
-	sti();
 	printk("\rTask-info:\n\r");
-	for (i=0 ; i<NR_TASKS ; i++)
+	for (i=0;i<NR_TASKS;i++)
 		if (task[i])
 			show_task(i,task[i]);
-	lock = 0;
 }
 
 #define LATCH (1193180/HZ)
@@ -135,11 +126,11 @@ void schedule(void)
 
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
 		if (*p) {
-			if ((*p)->timeout && (*p)->timeout < jiffies)
-				if ((*p)->state == TASK_INTERRUPTIBLE) {
-					(*p)->timeout = 0;
+			if ((*p)->timeout && (*p)->timeout < jiffies) {
+				(*p)->timeout = 0;
+				if ((*p)->state == TASK_INTERRUPTIBLE)
 					(*p)->state = TASK_RUNNING;
-				}
+			}
 			if ((*p)->alarm && (*p)->alarm < jiffies) {
 				(*p)->signal |= (1<<(SIGALRM-1));
 				(*p)->alarm = 0;
@@ -187,45 +178,29 @@ int sys_pause(void)
 	return -EINTR;
 }
 
-void wake_up(struct task_struct **p)
-{
-	struct task_struct * wakeup_ptr, * tmp;
-
-	if (p && *p) {
-		wakeup_ptr = *p;
-		*p = NULL;
-		while (wakeup_ptr && wakeup_ptr != task[0]) {
-			if (wakeup_ptr->state == TASK_STOPPED)
-				printk("wake_up: TASK_STOPPED\n");
-			else if (wakeup_ptr->state == TASK_ZOMBIE)
-				printk("wake_up: TASK_ZOMBIE\n");
-			else
-				wakeup_ptr->state = TASK_RUNNING;
-			tmp = wakeup_ptr->next_wait;
-			wakeup_ptr->next_wait = task[0];
-			wakeup_ptr = tmp;
-		}
-	}
-}
-
 static inline void __sleep_on(struct task_struct **p, int state)
 {
+	struct task_struct *tmp;
 	unsigned int flags;
 
 	if (!p)
 		return;
-	if (current == task[0])
+	if (current == &(init_task.task))
 		panic("task[0] trying to sleep");
 	__asm__("pushfl ; popl %0":"=r" (flags));
-	current->next_wait = *p;
-	task[0]->next_wait = NULL;
+	tmp = *p;
 	*p = current;
 	current->state = state;
+/* make sure interrupts are enabled: there should be no more races here */
 	sti();
-	schedule();
-	if (current->next_wait != task[0])
-		wake_up(p);
-	current->next_wait = NULL;
+repeat:	schedule();
+	if (*p && *p != current) {
+		current->state = TASK_UNINTERRUPTIBLE;
+		(**p).state = 0;
+		goto repeat;
+	}
+	if (*p = tmp)
+		tmp->state=0;
 	__asm__("pushl %0 ; popfl"::"r" (flags));
 }
 
@@ -237,6 +212,17 @@ void interruptible_sleep_on(struct task_struct **p)
 void sleep_on(struct task_struct **p)
 {
 	__sleep_on(p,TASK_UNINTERRUPTIBLE);
+}
+
+void wake_up(struct task_struct **p)
+{
+	if (p && *p) {
+		if ((**p).state == TASK_STOPPED)
+			printk("wake_up: TASK_STOPPED");
+		if ((**p).state == TASK_ZOMBIE)
+			printk("wake_up: TASK_ZOMBIE");
+		(**p).state=0;
+	}
 }
 
 /*
@@ -275,6 +261,14 @@ int ticks_to_floppy_on(unsigned int nr)
 	return mon_timer[nr];
 }
 
+void floppy_on(unsigned int nr)
+{
+	cli();
+	while (ticks_to_floppy_on(nr))
+		sleep_on(nr+wait_motor);
+	sti();
+}
+
 void floppy_off(unsigned int nr)
 {
 	moff_timer[nr]=3*HZ;
@@ -305,9 +299,7 @@ static struct timer_list {
 	long jiffies;
 	void (*fn)();
 	struct timer_list * next;
-} timer_list[TIME_REQUESTS] = { { 0, NULL, NULL }, };
-
-static struct timer_list * next_timer = NULL;
+} timer_list[TIME_REQUESTS], * next_timer = NULL;
 
 void add_timer(long jiffies, void (*fn)(void))
 {

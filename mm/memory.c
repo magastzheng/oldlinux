@@ -165,7 +165,6 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 			if (!(1 & this_page)) {
 				if (!(new_page = get_free_page()))
 					return -1;
-				++current->rss;
 				read_swap_page(this_page>>1, (char *) new_page);
 				*to_page_table = this_page;
 				*from_page_table = new_page | (PAGE_DIRTY | 7);
@@ -214,13 +213,7 @@ static unsigned long put_page(unsigned long page,unsigned long address)
 		*page_table = tmp | 7;
 		page_table = (unsigned long *) tmp;
 	}
-	page_table += (address>>12) & 0x3ff;
-	if (*page_table) {
-		printk("put_page: page already exists\n");
-		*page_table = 0;
-		invalidate();
-	}
-	*page_table = page | 7;
+	page_table[(address>>12) & 0x3ff] = page | 7;
 /* no need for invalidate */
 	return page;
 }
@@ -250,13 +243,7 @@ unsigned long put_dirty_page(unsigned long page, unsigned long address)
 		*page_table = tmp|7;
 		page_table = (unsigned long *) tmp;
 	}
-	page_table += (address>>12) & 0x3ff;
-	if (*page_table) {
-		printk("put_dirty_page: page already exists\n");
-		*page_table = 0;
-		invalidate();
-	}
-	*page_table = page | (PAGE_DIRTY | 7);
+	page_table[(address>>12) & 0x3ff] = page | (PAGE_DIRTY | 7);
 /* no need for invalidate */
 	return page;
 }
@@ -309,18 +296,16 @@ repeat:
  */
 void do_wp_page(unsigned long error_code,unsigned long address)
 {
-	if (address < TASK_SIZE) {
+	if (address < TASK_SIZE)
 		printk("\n\rBAD! KERNEL MEMORY WP-ERR!\n\r");
-		do_exit(SIGSEGV);
-	}
 	if (address - current->start_code >= TASK_SIZE) {
 		printk("Bad things happen: page error in do_wp_page\n\r");
 		do_exit(SIGSEGV);
 	}
-	++current->min_flt;
 	un_wp_page((unsigned long *)
 		(((address>>10) & 0xffc) + (0xfffff000 &
 		*((unsigned long *) ((address>>20) &0xffc)))));
+
 }
 
 void write_verify(unsigned long address)
@@ -431,8 +416,8 @@ static int share_page(struct inode * inode, unsigned long address)
 	return 0;
 }
 
-void do_no_page(unsigned long error_code, unsigned long address,
-	struct task_struct *tsk)
+void do_no_page(unsigned long error_code,
+		 unsigned long address, struct task_struct *tsk)
 {
 	static unsigned int last_checked = 0;
 	int nr[4];
@@ -441,7 +426,7 @@ void do_no_page(unsigned long error_code, unsigned long address,
 	int block,i;
 	struct inode * inode;
 
-	/* Thrashing ? Make it interruptible, but don't penalize otherwise */
+	/* Trashing ? Make it interruptible, but don't penalize otherwise */
 	for (i = 0; i < CHECK_LAST_NR; i++)
 		if ((address & 0xfffff000) == last_pages[i]) {
 			current->counter = 0;
@@ -451,15 +436,12 @@ void do_no_page(unsigned long error_code, unsigned long address,
 	if (last_checked >= CHECK_LAST_NR)
 		last_checked = 0;
 	last_pages[last_checked] = address & 0xfffff000;
-	if (address < TASK_SIZE) {
+	if (address < TASK_SIZE)
 		printk("\n\rBAD!! KERNEL PAGE MISSING\n\r");
-		do_exit(SIGSEGV);
-	}
 	if (address - tsk->start_code >= TASK_SIZE) {
 		printk("Bad things happen: nonexistent page error in do_no_page\n\r");
 		do_exit(SIGSEGV);
 	}
-	++tsk->rss;
 	page = *(unsigned long *) ((address >> 20) & 0xffc);
 /* check the page directory: make a page dir entry if no such exists */
 	if (page & 1) {
@@ -467,7 +449,6 @@ void do_no_page(unsigned long error_code, unsigned long address,
 		page += (address >> 10) & 0xffc;
 		tmp = *(unsigned long *) page;
 		if (tmp && !(1 & tmp)) {
-			++tsk->maj_flt;
 			swap_in((unsigned long *) page);
 			return;
 		}
@@ -492,19 +473,12 @@ void do_no_page(unsigned long error_code, unsigned long address,
 		block = 0;
 	}
 	if (!inode) {
-		++tsk->min_flt;
-		if (tmp > tsk->brk && tsk == current && 
-			LIBRARY_OFFSET - tmp > tsk->rlim[RLIMIT_STACK].rlim_max)
-				do_exit(SIGSEGV);
 		get_empty_page(address);
 		return;
 	}
 	if (tsk == current)
-		if (share_page(inode,tmp)) {
-			++tsk->min_flt;
-			return;
-		}
-	++tsk->maj_flt;
+	if (share_page(inode,tmp))
+		return;
 	if (!(page = get_free_page()))
 		oom();
 /* remember that 1 block is used for header */
@@ -544,17 +518,9 @@ void mem_init(long start_mem, long end_mem)
 void show_mem(void)
 {
 	int i,j,k,free=0,total=0;
-	int shared = 0;
+	int shared=0;
 	unsigned long * pg_tbl;
-	static int lock = 0;
 
-	cli();
-	if (lock) {
-		sti();
-		return;
-	}
-	lock = 1;
-	sti();
 	printk("Mem-info:\n\r");
 	for(i=0 ; i<PAGING_PAGES ; i++) {
 		if (mem_map[i] == USED)
@@ -595,19 +561,18 @@ void show_mem(void)
 		}
 	}
 	printk("Memory found: %d (%d)\n\r",free-shared,total);
-	lock = 0;
 }
 
 
 /* This routine handles page faults.  It determines the address,
    and the problem then passes it off to one of the appropriate
    routines. */
-void do_page_fault(unsigned long *esp, unsigned long error_code)
+void do_page_fault (unsigned long *esp, unsigned long error_code)
 {
 	unsigned long address;
 	/* get the address */
 
-	__asm__("movl %%cr2,%0":"=r" (address));
+	__asm__ ("movl %%cr2,%0":"=r" (address));
 	if (!(error_code & 1)) {
 		do_no_page(error_code, address, current);
 		return;

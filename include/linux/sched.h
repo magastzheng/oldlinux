@@ -120,22 +120,14 @@ struct task_struct {
 	 * older sibling, respectively.  (p->father can be replaced with 
 	 * p->p_pptr->pid)
 	 */
-	struct task_struct *p_pptr, *p_cptr, *p_ysptr, *p_osptr;
-	/*
-	 * sleep makes a singly linked list with this.
-	 */
-	struct task_struct *next_wait;
+	struct task_struct	*p_pptr, *p_cptr, *p_ysptr, *p_osptr;
 	unsigned short uid,euid,suid;
 	unsigned short gid,egid,sgid;
 	unsigned long timeout,alarm;
 	long utime,stime,cutime,cstime,start_time;
-	unsigned long min_flt, maj_flt;
-	unsigned long cmin_flt, cmaj_flt;
 	struct rlimit rlim[RLIM_NLIMITS]; 
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned short used_math;
-	unsigned short rss;	/* number of resident pages */
-	char comm[8];
 /* file system info */
 	int link_count;
 	int tty;		/* -1 if no tty, so it must be signed */
@@ -172,17 +164,14 @@ struct task_struct {
 /* ec,brk... */	0,0,0,0,0,0, \
 /* pid etc.. */	0,0,0,0, \
 /* suppl grps*/ {NOGROUP,}, \
-/* proc links*/ &init_task.task,NULL,NULL,NULL,NULL, \
+/* proc links*/ &init_task.task,0,0,0, \
 /* uid etc */	0,0,0,0,0,0, \
 /* timeout */	0,0,0,0,0,0,0, \
-/* min_flt */	0,0,0,0, \
 /* rlimits */   { {0x7fffffff, 0x7fffffff}, {0x7fffffff, 0x7fffffff},  \
 		  {0x7fffffff, 0x7fffffff}, {0x7fffffff, 0x7fffffff}, \
 		  {0x7fffffff, 0x7fffffff}, {0x7fffffff, 0x7fffffff}}, \
 /* flags */	0, \
 /* math */	0, \
-/* rss */	2, \
-/* comm */	"swapper", \
 /* fs info */	0,-1,0022,NULL,NULL,NULL,NULL,0, \
 /* filp */	{NULL,}, \
 	{ \

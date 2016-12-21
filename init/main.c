@@ -203,7 +203,6 @@ void init(void)
 		NR_BUFFERS*BLOCK_SIZE);
 	printf("Free mem: %d bytes\n\r",memory_end-main_memory_start);
 
-	execve("/etc/init",argv_init,envp_init);
 	execve("/bin/init",argv_init,envp_init);
 	/* if this fails, fall through to original stuff */
 

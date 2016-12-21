@@ -27,8 +27,8 @@
 #include <asm/io.h>
 
 extern int end;
-static struct buffer_head * start_buffer = (struct buffer_head *) &end;
-static struct buffer_head * hash_table[NR_HASH];
+struct buffer_head * start_buffer = (struct buffer_head *) &end;
+struct buffer_head * hash_table[NR_HASH];
 static struct buffer_head * free_list;
 static struct task_struct * buffer_wait = NULL;
 int NR_BUFFERS = 0;
@@ -109,15 +109,10 @@ void inline invalidate_buffers(int dev)
 void check_disk_change(int dev)
 {
 	int i;
-	struct buffer_head * bh;
 
 	if (MAJOR(dev) != 2)
 		return;
-	if (!(bh = getblk(dev,0)))
-		return;
-	i = floppy_change(bh);
-	brelse(bh);
-	if (!i)
+	if (!floppy_change(dev & 0x03))
 		return;
 	for (i=0 ; i<NR_SUPER ; i++)
 		if (super_block[i].s_dev == dev)
@@ -406,10 +401,6 @@ void buffer_init(long buffer_end)
 	else
 		b = (void *) buffer_end;
 	while ( (b -= BLOCK_SIZE) >= ((void *) (h+1)) ) {
-		if (((unsigned long) (h+1)) > 0xA0000) {
-			printk("buffer-list doesn't fit in low meg - contact Linus\n");
-			break;
-		}
 		h->b_dev = 0;
 		h->b_dirt = 0;
 		h->b_count = 0;
