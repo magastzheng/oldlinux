@@ -29,8 +29,8 @@
  *    the EXP_n values would be 1981, 2034 and 2043 if still using only
  *    11 bit fractions.
  */
-#define	FSHIFT		11		/* nr of bits of precision */
-#define	FIXED_1		(1<<FSHIFT)	/* 1.0 as fixed-point */
+#define FSHIFT		11		/* nr of bits of precision */
+#define FIXED_1		(1<<FSHIFT)	/* 1.0 as fixed-point */
 #define LOAD_FREQ	(5*HZ)		/* 5 sec intervals */
 #define EXP_1		1884		/* 1/exp(5sec/1min) as fixed-point */
 #define EXP_5		2014		/* 1/exp(5sec/5min) */
@@ -160,6 +160,7 @@ struct task_struct {
 	unsigned short rss;	/* number of resident pages */
 	char comm[8];
 	struct vm86_struct * vm86_info;
+	unsigned long screen_bitmap;
 /* file system info */
 	int link_count;
 	int tty;		/* -1 if no tty, so it must be signed */
@@ -211,7 +212,7 @@ struct task_struct {
 /* math */	0, \
 /* rss */	2, \
 /* comm */	"swapper", \
-/* vm86_info */	NULL, \
+/* vm86_info */	NULL, 0, \
 /* fs info */	0,-1,0022,NULL,NULL,NULL, \
 /* libraries */	{ { NULL, 0, 0}, }, 0, \
 /* filp */	{NULL,}, 0, \

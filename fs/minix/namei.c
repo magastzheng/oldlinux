@@ -14,8 +14,6 @@
 
 #include <asm/segment.h>
 
-#include <const.h>
-
 /*
  * comment out this line if you want names > MINIX_NAME_LEN chars to be
  * truncated. Else they will be disallowed.
@@ -260,9 +258,10 @@ int minix_mknod(struct inode * dir, const char * name, int len, int mode, int rd
 		inode->i_op = &minix_blkdev_inode_operations;
 	else if (S_ISFIFO(inode->i_mode)) {
 		inode->i_op = &minix_fifo_inode_operations;
-		inode->i_size = 0;
 		inode->i_pipe = 1;
+		PIPE_BASE(*inode) = NULL;
 		PIPE_HEAD(*inode) = PIPE_TAIL(*inode) = 0;
+		PIPE_READ_WAIT(*inode) = PIPE_WRITE_WAIT(*inode) = NULL;
 		PIPE_READERS(*inode) = PIPE_WRITERS(*inode) = 0;
 	}
 	if (S_ISBLK(mode) || S_ISCHR(mode))
@@ -322,7 +321,7 @@ int minix_mkdir(struct inode * dir, const char * name, int len, int mode)
 	inode->i_nlink = 2;
 	dir_block->b_dirt = 1;
 	brelse(dir_block);
-	inode->i_mode = I_DIRECTORY | (mode & 0777 & ~current->umask);
+	inode->i_mode = S_IFDIR | (mode & 0777 & ~current->umask);
 	inode->i_dirt = 1;
 	bh = minix_add_entry(dir,name,len,&de);
 	if (!bh) {

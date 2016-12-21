@@ -1,6 +1,6 @@
 /*
  * malloc.c --- a general purpose kernel memory allocator for Linux.
- * 
+ *
  * Written by Theodore Ts'o (tytso@mit.edu), 11/29/91
  *
  * This routine is written to be as fast as possible, so that it
@@ -15,14 +15,14 @@
  * called, it looks for the smallest bucket size which will fulfill its
  * request, and allocate a piece of memory from that bucket pool.
  *
- * Each bucket has as its control block a bucket descriptor which keeps 
+ * Each bucket has as its control block a bucket descriptor which keeps
  * track of how many objects are in use on that page, and the free list
  * for that page.  Like the buckets themselves, bucket descriptors are
  * stored on pages requested from get_free_page().  However, unlike buckets,
  * pages devoted to bucket descriptor pages are never released back to the
  * system.  Fortunately, a system should probably only need 1 or 2 bucket
  * descriptor pages, since a page can hold 256 bucket descriptors (which
- * corresponds to 1 megabyte worth of bucket pages.)  If the kernel is using 
+ * corresponds to 1 megabyte worth of bucket pages.)  If the kernel is using
  * that much allocated memory, it's probably doing something wrong.  :-)
  *
  * Note: malloc() and free() both call get_free_page() and free_page()
@@ -36,11 +36,11 @@
  *	"pre-allocated" so that it can safely draw upon those pages if
  * 	it is called from an interrupt routine.
  *
- * 	Another concern is that get_free_page() should not sleep; if it 
- *	does, the code is carefully ordered so as to avoid any race 
- *	conditions.  The catch is that if malloc() is called re-entrantly, 
- *	there is a chance that unecessary pages will be grabbed from the 
- *	system.  Except for the pages for the bucket descriptor page, the 
+ * 	Another concern is that get_free_page() should not sleep; if it
+ *	does, the code is carefully ordered so as to avoid any race
+ *	conditions.  The catch is that if malloc() is called re-entrantly,
+ *	there is a chance that unecessary pages will be grabbed from the
+ *	system.  Except for the pages for the bucket descriptor page, the
  *	extra pages will eventually get released back to the system, though,
  *	so it isn't all that bad.
  */
@@ -49,6 +49,9 @@
    can sleep, and tcp/ip needs to call malloc at interrupt time  (Or keep
    big buffers around for itself.)  I guess I'll have return from
    syscall fill up the free page descriptors. -RAB */
+
+/* since the advent of GFP_ATOMIC, I've changed the malloc code to
+   use it and return NULL if it can't get a page. -RAB */
 
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -69,7 +72,7 @@ struct _bucket_dir {	/* 8 bytes */
 
 /*
  * The following is the where we store a pointer to the first bucket
- * descriptor for a given size.  
+ * descriptor for a given size.
  *
  * If it turns out that the Linux kernel allocates a lot of objects of a
  * specific size, then we may want to add that specific size to this list,
@@ -91,84 +94,6 @@ struct _bucket_dir bucket_dir[] = {
 	{ 4096, (struct bucket_desc *) 0},
 	{ 0,    (struct bucket_desc *) 0}};   /* End of list marker */
 
-/* Where to keep the extra pages, and how many. */
-#define FREE_PAGES 20
-static volatile unsigned long free_pages[FREE_PAGES]={0,};
-volatile short free_page_ptr=0; /* this -1 is next free page. */
-
-/* malloc_free_page makes sure that we have all the free pages we
-   want around before actually freeing the page. */
-
-/* called with interrupts off. */
-void
-malloc_free_page (unsigned long addr)
-{
-   if (free_page_ptr < FREE_PAGES)
-     free_pages[free_page_ptr++] = addr;
-   else
-     free_page (addr);
-}
-
-/* Fill up the extra page buffer. Should be called quite often to make
-   sure we have some floating around. */
-
-void
-malloc_grab_pages(void)
-{
-   while (free_page_ptr < FREE_PAGES)
-     {
-	unsigned long page;
-
-	page = get_free_page (GFP_KERNEL);
-	if (page == 0)
-	  {
-	     printk ("malloc_grab_pages: Can't happen. no memory.\n");
-	     continue;
-	  }
-	/* see if we still need the page. This can only happen if
-	    we get interrupted while we are trying to get some pages,
-	    and we are out of pages.  It shouldn't happen, but it
-	    could and we had better check for it. */
-	cli();
-	if (free_page_ptr < FREE_PAGES)
-	  {
-	     free_pages[free_page_ptr] = page;
-	     free_page_ptr++;
-	  }
-	else
-	  {
-	     free_page(page);
-	  }
-	sti();
-     }
-}
-
-/* called with interrupts off. */
-static inline unsigned long
-malloc_get_free_page (void)
-{
-   unsigned long page;
-   int page_ptr;
-
-   if (free_page_ptr > 0)
-     {
-	page_ptr = --free_page_ptr;
-	page = free_pages[page_ptr];
-	free_pages[page_ptr] = 0;
-	return (page);
-     }
-
-   printk ("malloc_get_free_page: Calling malloc_grab_pages\n");
-   /* this routine turns on interrupts.  Maybe we should do a pushflags
-      pop flags around it. */
-   malloc_grab_pages();
-   cli();
-   page_ptr = --free_page_ptr;
-   page = free_pages[page_ptr];
-   free_pages[page_ptr] = 0;
-   return (page);
-}
-
 /*
  * This contains a linked list of free bucket descriptor blocks
  */
@@ -177,24 +102,26 @@ static struct bucket_desc *free_bucket_desc = (struct bucket_desc *) 0;
 /*
  * This routine initializes a bucket description page.
  */
-static inline void init_bucket_desc()
+static inline int init_bucket_desc()
 {
 	struct bucket_desc *bdesc, *first;
-	int	i;
+	int i;
 	/* this turns interrupt on, so we should be carefull. */
-	first = bdesc = (struct bucket_desc *) malloc_get_free_page();
+	first = bdesc = (struct bucket_desc *) get_free_page(GFP_ATOMIC);
 	if (!bdesc)
-		panic("Out of memory in init_bucket_desc()");
+		return 1;
 	for (i = PAGE_SIZE/sizeof(struct bucket_desc); i > 1; i--) {
 		bdesc->next = bdesc+1;
 		bdesc++;
 	}
 	/*
-	 * This is done last, to avoid race conditions in case 
+	 * This is done last, to avoid race conditions in case
 	 * get_free_page() sleeps and this routine gets called again....
 	 */
+	/* Get free page will not sleep because of the GFP_ATOMIC */
 	bdesc->next = free_bucket_desc;
 	free_bucket_desc = first;
+	return (0);
 }
 
 void *malloc(unsigned int len)
@@ -210,36 +137,41 @@ void *malloc(unsigned int len)
 	for (bdir = bucket_dir; bdir->size; bdir++)
 		if (bdir->size >= len)
 			break;
+
 	if (!bdir->size) {
-		printk("malloc called with impossibly large argument (%d)\n",
-			len);
-		panic("malloc: bad arg");
+		printk("malloc called with impossibly large argument (%d)\n", len);
+		return NULL;
 	}
 	/*
 	 * Now we search for a bucket descriptor which has free space
 	 */
 	cli();	/* Avoid race conditions */
-	for (bdesc = bdir->chain; bdesc; bdesc = bdesc->next) 
+	for (bdesc = bdir->chain; bdesc; bdesc = bdesc->next)
 		if (bdesc->freeptr)
 			break;
 	/*
-	 * If we didn't find a bucket with free space, then we'll 
+	 * If we didn't find a bucket with free space, then we'll
 	 * allocate a new one.
 	 */
 	if (!bdesc) {
-		char		*cp;
-		int		i;
+		char *cp;
+		int i;
 
-		if (!free_bucket_desc)	
-			init_bucket_desc();
+		if (!free_bucket_desc)
+			if (init_bucket_desc()) {
+				sti();
+				return NULL;
+			}
 		bdesc = free_bucket_desc;
 		free_bucket_desc = bdesc->next;
 		bdesc->refcnt = 0;
 		bdesc->bucket_size = bdir->size;
 		bdesc->page = bdesc->freeptr =
-		  (void *) cp = malloc_get_free_page();
-		if (!cp)
-			panic("Out of memory in kernel malloc()");
+		  (void *) cp = get_free_page(GFP_ATOMIC);
+		if (!cp) {
+			sti();
+			return NULL;
+		}
 		/* Set up the chain of free objects */
 		for (i=PAGE_SIZE/bdir->size; i > 1; i--) {
 			*((char **) cp) = cp + bdir->size;
@@ -253,14 +185,14 @@ void *malloc(unsigned int len)
 	bdesc->freeptr = *((void **) retval);
 	bdesc->refcnt++;
 	sti();	/* OK, we're safe again */
-	return(retval);
+	return retval;
 }
 
 /*
  * Here is the free routine.  If you know the size of the object that you
  * are freeing, then free_s() will use that information to speed up the
  * search for the bucket descriptor.
- * 
+ *
  * We will #define a macro so that "free(x)" is becomes "free_s(x, 0)"
  */
 void free_s(void *obj, int size)
@@ -278,7 +210,7 @@ void free_s(void *obj, int size)
 		if (bdir->size < size)
 			continue;
 		for (bdesc = bdir->chain; bdesc; bdesc = bdesc->next) {
-			if (bdesc->page == page) 
+			if (bdesc->page == page)
 				goto found;
 			prev = bdesc;
 		}
@@ -307,11 +239,10 @@ found:
 				panic("malloc bucket chains corrupted");
 			bdir->chain = bdesc->next;
 		}
-		malloc_free_page((unsigned long) bdesc->page);
+		free_page((unsigned long) bdesc->page);
 		bdesc->next = free_bucket_desc;
 		free_bucket_desc = bdesc;
 	}
 	sti();
 	return;
 }
-
