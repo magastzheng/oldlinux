@@ -11,21 +11,21 @@
 
 #include "fpu_emu.h"
 
-extern REG CONST_1;
-extern REG CONST_2;
-extern REG CONST_HALF;
-extern REG CONST_L2T;
-extern REG CONST_L2E;
-extern REG CONST_PI;
-extern REG CONST_PI2;
-extern REG CONST_PI4;
-extern REG CONST_LG2;
-extern REG CONST_LN2;
-extern REG CONST_Z;
-extern REG CONST_PINF;
-extern REG CONST_INF;
-extern REG CONST_MINF;
-extern REG CONST_QNaN;
+extern FPU_REG CONST_1;
+extern FPU_REG CONST_2;
+extern FPU_REG CONST_HALF;
+extern FPU_REG CONST_L2T;
+extern FPU_REG CONST_L2E;
+extern FPU_REG CONST_PI;
+extern FPU_REG CONST_PI2;
+extern FPU_REG CONST_PI4;
+extern FPU_REG CONST_LG2;
+extern FPU_REG CONST_LN2;
+extern FPU_REG CONST_Z;
+extern FPU_REG CONST_PINF;
+extern FPU_REG CONST_INF;
+extern FPU_REG CONST_MINF;
+extern FPU_REG CONST_QNaN;
 
 #endif _REG_CONSTANT_H_
 
