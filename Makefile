@@ -2,31 +2,30 @@
 # if you want the ram-disk device, define this to be the
 # size in blocks.
 #
-RAMDISK = #-DRAMDISK=512
+#RAMDISK = -DRAMDISK=512
 
 AS86	=as86 -0 -a
 LD86	=ld86 -0
 
-AS	=gas
-LD	=gld
+AS	=as
+LD	=ld
 LDFLAGS	=-s -x -M
 CC	=gcc $(RAMDISK)
-CFLAGS	=-Wall -O -fstrength-reduce -fomit-frame-pointer \
--fcombine-regs -mstring-insns
+CFLAGS	=-Wall -O -fstrength-reduce -fomit-frame-pointer
 CPP	=cpp -nostdinc -Iinclude
 
 #
 # ROOT_DEV specifies the default root-device when making the image.
 # This can be either FLOPPY, /dev/xxxx or empty, in which case the
-# default of /dev/hd6 is used by 'build'.
+# default of FLOPPY is used by 'build'.
 #
-ROOT_DEV=/dev/hd6
-SWAP_DEV=/dev/hd2
+ROOT_DEV=/dev/hdb1
 
-ARCHIVES=kernel/kernel.o mm/mm.o fs/fs.o
-DRIVERS =kernel/blk_drv/blk_drv.a kernel/chr_drv/chr_drv.a
-MATH	=kernel/math/math.a
-LIBS	=lib/lib.a
+ARCHIVES	=kernel/kernel.o mm/mm.o fs/fs.o
+FILESYSTEMS	=fs/minix/minix.o
+DRIVERS		=kernel/blk_drv/blk_drv.a kernel/chr_drv/chr_drv.a
+MATH		=kernel/math/math.a
+LIBS		=lib/lib.a
 
 .c.s:
 	$(CC) $(CFLAGS) \
@@ -40,8 +39,7 @@ LIBS	=lib/lib.a
 all:	Image
 
 Image: boot/bootsect boot/setup tools/system tools/build
-	tools/build boot/bootsect boot/setup tools/system $(ROOT_DEV) \
-		$(SWAP_DEV) > Image
+	tools/build boot/bootsect boot/setup tools/system $(ROOT_DEV) > Image
 	sync
 
 disk: Image
@@ -54,33 +52,37 @@ tools/build: tools/build.c
 boot/head.o: boot/head.s
 
 tools/system:	boot/head.o init/main.o \
-		$(ARCHIVES) $(DRIVERS) $(MATH) $(LIBS)
+		$(ARCHIVES) $(FILESYSTEMS) $(DRIVERS) $(MATH) $(LIBS)
 	$(LD) $(LDFLAGS) boot/head.o init/main.o \
 	$(ARCHIVES) \
+	$(FILESYSTEMS) \
 	$(DRIVERS) \
 	$(MATH) \
 	$(LIBS) \
 	-o tools/system > System.map
 
-kernel/math/math.a:
+kernel/math/math.a: dummy
 	(cd kernel/math; make)
 
-kernel/blk_drv/blk_drv.a:
+kernel/blk_drv/blk_drv.a: dummy
 	(cd kernel/blk_drv; make)
 
-kernel/chr_drv/chr_drv.a:
+kernel/chr_drv/chr_drv.a: dummy
 	(cd kernel/chr_drv; make)
 
-kernel/kernel.o:
+kernel/kernel.o: dummy
 	(cd kernel; make)
 
-mm/mm.o:
+mm/mm.o: dummy
 	(cd mm; make)
 
-fs/fs.o:
+fs/fs.o: dummy
 	(cd fs; make)
 
-lib/lib.a:
+fs/minix/minix.o: dummy
+	(cd fs/minix; make)
+
+lib/lib.a: dummy
 	(cd lib; make)
 
 boot/setup: boot/setup.s
@@ -99,7 +101,7 @@ boot/bootsect:	boot/bootsect.s
 
 clean:
 	rm -f Image System.map tmp_make core boot/bootsect boot/setup \
-		boot/bootsect.s boot/setup.s
+		boot/bootsect.s boot/setup.s init/main.s
 	rm -f init/*.o tools/system tools/build boot/*.o
 	(cd mm;make clean)
 	(cd fs;make clean)
@@ -117,6 +119,8 @@ dep:
 	(cd fs; make dep)
 	(cd kernel; make dep)
 	(cd mm; make dep)
+
+dummy:
 
 ### Dependencies:
 init/main.o : init/main.c include/unistd.h include/sys/stat.h \

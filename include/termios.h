@@ -3,8 +3,6 @@
 
 #include <sys/types.h>
 
-#define TTY_BUF_SIZE 1024
-
 /* 0x54 is just a magic number to make these relatively uniqe ('T') */
 
 #define TCGETS		0x5401
@@ -35,6 +33,7 @@
 #define TIOCSSOFTCAR	0x541A
 #define FIONREAD	0x541B
 #define TIOCINQ		FIONREAD
+#define TIOCLINUX	0x541C
 
 struct winsize {
 	unsigned short ws_row;

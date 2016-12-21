@@ -2,19 +2,28 @@
 #define _CONFIG_H
 
 /*
+ * Define this if you want the math-emulation code: if this is undefined,
+ * the kernel will be smaller, but you'll get FPU exceptions if you don't
+ * have a 387 and are trying to use math.
+ */
+
+#define KERNEL_MATH_EMULATION
+
+
+/*
  * Defines for what uname() should return 
  */
 #define UTS_SYSNAME "Linux"
 #define UTS_NODENAME "(none)"	/* set by sethostname() */
 #define UTS_RELEASE "0"		/* patchlevel */
-#define UTS_VERSION "0.12"
+#define UTS_VERSION "0.95a"
 #define UTS_MACHINE "i386"	/* hardware type */
 
 /* Don't touch these, unless you really know what your doing. */
 #define DEF_INITSEG	0x9000
 #define DEF_SYSSEG	0x1000
 #define DEF_SETUPSEG	0x9020
-#define DEF_SYSSIZE	0x3000
+#define DEF_SYSSIZE	0x4000
 
 /*
  * The root-device is no longer hard-coded. You can change the default
