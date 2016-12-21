@@ -11,7 +11,6 @@
 #include <signal.h>
 
 volatile void do_exit(int error_code);
-void release_all_children(void);
 
 int sys_sgetmask()
 {
@@ -92,15 +91,14 @@ void do_signal(long signr,long eax, long ebx, long ecx, long edx,
 	unsigned long * tmp_esp;
 
 	sa_handler = (unsigned long) sa->sa_handler;
-	if (signr == SIGCHLD)
-		if (sa_handler < 2) {
-			release_all_children();
-			return;
-		}
 	if (sa_handler==1)
 		return;
-	if (!sa_handler)
-		do_exit(signr);
+	if (!sa_handler) {
+		if (signr==SIGCHLD)
+			return;
+		else
+			do_exit(1<<(signr-1));
+	}
 	if (sa->sa_flags & SA_ONESHOT)
 		sa->sa_handler = NULL;
 	*(&eip) = sa_handler;

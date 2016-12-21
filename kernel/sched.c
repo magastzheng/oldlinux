@@ -221,7 +221,7 @@ int ticks_to_floppy_on(unsigned int nr)
 		outb(mask,FD_DOR);
 		if ((mask ^ current_DOR) & 0xf0)
 			mon_timer[nr] = HZ/2;
-		else
+		else if (mon_timer[nr] < 2)
 			mon_timer[nr] = 2;
 		current_DOR = mask;
 	}

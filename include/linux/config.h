@@ -11,9 +11,11 @@
  * KBD_FINNISH for Finnish keyboards
  * KBD_US for US-type
  * KBD_GR for German keyboards
+ * KBD_FR for Frech keyboard
  */
-/*#define KBD_US*/
+/*#define KBD_US */
 /*#define KBD_GR */
+/*#define KBD_FR */
 #define KBD_FINNISH
 
 /*

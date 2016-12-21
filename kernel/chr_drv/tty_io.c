@@ -53,7 +53,7 @@ struct tty_struct tty_table[] = {
 		{ICRNL,		/* change incoming CR to NL */
 		OPOST|ONLCR,	/* change outgoing NL to CRNL */
 		0,
-		ICANON | ECHO | ECHOCTL | ECHOKE,
+		ISIG | ICANON | ECHO | ECHOCTL | ECHOKE,
 		0,		/* console termio */
 		INIT_C_CC},
 		0,			/* initial pgrp */
@@ -66,7 +66,7 @@ struct tty_struct tty_table[] = {
 		{0, /* no translation */
 		0,  /* no translation */
 		B2400 | CS8,
-		ISIG,
+		0,
 		0,
 		INIT_C_CC},
 		0,
@@ -79,7 +79,7 @@ struct tty_struct tty_table[] = {
 		{0, /* no translation */
 		0,  /* no translation */
 		B2400 | CS8,
-		ISIG,
+		0,
 		0,
 		INIT_C_CC},
 		0,
@@ -197,7 +197,7 @@ void copy_to_cooked(struct tty_struct * tty)
 				continue;
 			}
 		}
-		if (!L_ISIG(tty)) {
+		if (L_ISIG(tty)) {
 			if (c==INTR_CHAR(tty)) {
 				tty_intr(tty,INTMASK);
 				continue;

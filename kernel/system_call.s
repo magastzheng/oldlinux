@@ -234,7 +234,8 @@ _hd_interrupt:
 	outb %al,$0xA0		# EOI to interrupt controller #1
 	jmp 1f			# give port chance to breathe
 1:	jmp 1f
-1:	movl _do_hd,%edx
+1:	xorl %edx,%edx
+	xchgl _do_hd,%edx
 	testl %edx,%edx
 	jne 1f
 	movl $_unexpected_hd_interrupt,%edx
@@ -262,7 +263,8 @@ _floppy_interrupt:
 	mov %ax,%fs
 	movb $0x20,%al
 	outb %al,$0x20		# EOI to interrupt controller #1
-	movl _do_floppy,%eax
+	xorl %eax,%eax
+	xchgl _do_floppy,%eax
 	testl %eax,%eax
 	jne 1f
 	movl $_unexpected_floppy_interrupt,%eax

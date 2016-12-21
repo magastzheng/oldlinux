@@ -67,6 +67,8 @@ static void add_request(struct blk_dev_struct * dev, struct request * req)
 
 	req->next = NULL;
 	cli();
+	if (req->bh)
+		req->bh->b_dirt = 0;
 	if (!(tmp = dev->current_request)) {
 		dev->current_request = req;
 		sti();

@@ -81,6 +81,21 @@ int sync_dev(int dev)
 	return 0;
 }
 
+void inline invalidate_buffers(int dev)
+{
+	int i;
+	struct buffer_head * bh;
+
+	bh = start_buffer;
+	for (i=0 ; i<NR_BUFFERS ; i++,bh++) {
+		if (bh->b_dev != dev)
+			continue;
+		wait_on_buffer(bh);
+		if (bh->b_dev == dev)
+			bh->b_uptodate = bh->b_dirt = 0;
+	}
+}
+
 /*
  * This routine checks whether a floppy has been changed, and
  * invalidates all buffer-cache-entries in that case. This
@@ -98,25 +113,16 @@ int sync_dev(int dev)
 void check_disk_change(int dev)
 {
 	int i;
-	struct buffer_head * bh;
 
 	if (MAJOR(dev) != 2)
 		return;
-	dev=MINOR(dev) & 0x03;	/* which floppy is it? */
-	if (!floppy_change(dev))
+	if (!floppy_change(dev & 0x03))
 		return;
-	dev |= 0x200;
 	for (i=0 ; i<NR_SUPER ; i++)
-		if ((super_block[i].s_dev & 0xff03)==dev)
+		if (super_block[i].s_dev == dev)
 			put_super(super_block[i].s_dev);
-	bh = start_buffer;
-	for (i=0 ; i<NR_BUFFERS ; i++,bh++) {
-		if ((bh->b_dev & 0xff03) != dev)
-			continue;
-		wait_on_buffer(bh);
-		if ((bh->b_dev & 0xff03) == dev)
-			bh->b_uptodate = bh->b_dirt = 0;
-	}
+	invalidate_inodes(dev);
+	invalidate_buffers(dev);
 }
 
 #define _hashfn(dev,block) (((unsigned)(dev^block))%NR_HASH)

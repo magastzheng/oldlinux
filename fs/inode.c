@@ -40,6 +40,22 @@ static inline void unlock_inode(struct m_inode * inode)
 	wake_up(&inode->i_wait);
 }
 
+void invalidate_inodes(int dev)
+{
+	int i;
+	struct m_inode * inode;
+
+	inode = 0+inode_table;
+	for(i=0 ; i<NR_INODE ; i++,inode++) {
+		wait_on_inode(inode);
+		if (inode->i_dev == dev) {
+			if (inode->i_count)
+				printk("inode in use on removed disk\n\r");
+			inode->i_dev = inode->i_dirt = 0;
+		}
+	}
+}
+
 void sync_inodes(void)
 {
 	int i;
@@ -302,7 +318,7 @@ static void write_inode(struct m_inode * inode)
 	int block;
 
 	lock_inode(inode);
-	if (!inode->i_dirt) {
+	if (!inode->i_dirt || !inode->i_dev) {
 		unlock_inode(inode);
 		return;
 	}

@@ -1,13 +1,26 @@
-AS86	=as -0 -a
-CC86	=cc -0
-LD86	=ld -0
+#
+# if you want the ram-disk device, define this to be the
+# size in blocks.
+#
+RAMDISK = #-DRAMDISK=512
+
+AS86	=as86 -0 -a
+LD86	=ld86 -0
 
 AS	=gas
 LD	=gld
 LDFLAGS	=-s -x -M
-CC	=gcc
-CFLAGS	=-Wall -O -fstrength-reduce -fomit-frame-pointer -fcombine-regs
+CC	=gcc $(RAMDISK)
+CFLAGS	=-Wall -O -fstrength-reduce -fomit-frame-pointer \
+-fcombine-regs -mstring-insns
 CPP	=cpp -nostdinc -Iinclude
+
+#
+# ROOT_DEV specifies the default root-device when making the image.
+# This can be either FLOPPY, /dev/xxxx or empty, in which case the
+# default of /dev/hd6 is used by 'build'.
+#
+ROOT_DEV=/dev/hd6
 
 ARCHIVES=kernel/kernel.o mm/mm.o fs/fs.o
 DRIVERS =kernel/blk_drv/blk_drv.a kernel/chr_drv/chr_drv.a
@@ -26,7 +39,7 @@ LIBS	=lib/lib.a
 all:	Image
 
 Image: boot/bootsect boot/setup tools/system tools/build
-	tools/build boot/bootsect boot/setup tools/system > Image
+	tools/build boot/bootsect boot/setup tools/system $(ROOT_DEV) > Image
 	sync
 
 disk: Image
@@ -35,7 +48,6 @@ disk: Image
 tools/build: tools/build.c
 	$(CC) $(CFLAGS) \
 	-o tools/build tools/build.c
-#	chmem +65000 tools/build
 
 boot/head.o: boot/head.s
 
@@ -83,8 +95,8 @@ tmp.s:	boot/bootsect.s tools/system
 	cat boot/bootsect.s >> tmp.s
 
 clean:
-	rm -f Image System.map tmp_make core # boot/bootsect boot/setup
-	rm -f init/*.o tools/system tools/build # boot/*.o
+	rm -f Image System.map tmp_make core boot/bootsect boot/setup
+	rm -f init/*.o tools/system tools/build boot/*.o
 	(cd mm;make clean)
 	(cd fs;make clean)
 	(cd kernel;make clean)

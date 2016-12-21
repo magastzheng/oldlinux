@@ -53,16 +53,6 @@ static void kill_session(void)
 	}
 }
 
-void release_all_children(void)
-{
-	struct task_struct ** p = NR_TASKS + task;
-
-	while (--p > &FIRST_TASK)
-		if (*p && (*p)->father == current->pid &&
-		(*p)->state == TASK_ZOMBIE)
-			release(*p);
-}
-
 /*
  * XXX need to check permissions needed to send signals to process
  * groups, etc. etc.  kill() permissions semantics are tricky!
@@ -116,8 +106,12 @@ int do_exit(long code)
 	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f));
 	free_page_tables(get_base(current->ldt[2]),get_limit(0x17));
 	for (i=0 ; i<NR_TASKS ; i++)
-		if (task[i] && task[i]->father == current->pid)
+		if (task[i] && task[i]->father == current->pid) {
 			task[i]->father = 1;
+			if (task[i]->state == TASK_ZOMBIE)
+				/* assumption task[1] is always init */
+				(void) send_sig(SIGCHLD, task[1], 1);
+		}
 	for (i=0 ; i<NR_OPEN ; i++)
 		if (current->filp[i])
 			sys_close(i);

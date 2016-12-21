@@ -9,6 +9,8 @@
  * request-list, using interrupts to jump between functions. As
  * all the functions are called within interrupts, we may not
  * sleep. Special care is recommended.
+ * 
+ *  modified by Drew Eckhardt to check nr of hd's from the CMOS.
  */
 
 #include <linux/config.h>
@@ -22,6 +24,11 @@
 
 #define MAJOR_NR 3
 #include "blk.h"
+
+#define CMOS_READ(addr) ({ \
+outb_p(0x80|addr,0x70); \
+inb_p(0x71); \
+})
 
 /* Max read/write errors/sector */
 #define MAX_ERRORS	7
@@ -58,12 +65,14 @@ __asm__("cld;rep;insw"::"d" (port),"D" (buf),"c" (nr):"cx","di")
 __asm__("cld;rep;outsw"::"d" (port),"S" (buf),"c" (nr):"cx","si")
 
 extern void hd_interrupt(void);
+extern void rd_load(void);
 
 /* This may be used only once, enforced by 'static int callable' */
 int sys_setup(void * BIOS)
 {
 	static int callable = 1;
 	int i,drive;
+	unsigned char cmos_disks;
 	struct partition *p;
 	struct buffer_head * bh;
 
@@ -90,6 +99,40 @@ int sys_setup(void * BIOS)
 		hd[i*5].nr_sects = hd_info[i].head*
 				hd_info[i].sect*hd_info[i].cyl;
 	}
+
+	/*
+		We querry CMOS about hard disks : it could be that 
+		we have a SCSI/ESDI/etc controller that is BIOS
+		compatable with ST-506, and thus showing up in our
+		BIOS table, but not register compatable, and therefore
+		not present in CMOS.
+
+		Furthurmore, we will assume that our ST-506 drives
+		<if any> are the primary drives in the system, and 
+		the ones reflected as drive 1 or 2.
+
+		The first drive is stored in the high nibble of CMOS
+		byte 0x12, the second in the low nibble.  This will be
+		either a 4 bit drive type or 0xf indicating use byte 0x19 
+		for an 8 bit type, drive 1, 0x1a for drive 2 in CMOS.
+
+		Needless to say, a non-zero value means we have 
+		an AT controller hard disk for that drive.
+
+		
+	*/
+
+	if ((cmos_disks = CMOS_READ(0x12)) & 0xf0)
+		if (cmos_disks & 0x0f)
+			NR_HD = 2;
+		else
+			NR_HD = 1;
+	else
+		NR_HD = 0;
+	for (i = NR_HD ; i < 2 ; i++) {
+		hd[i*5].start_sect = 0;
+		hd[i*5].nr_sects = 0;
+	}
 	for (drive=0 ; drive<NR_HD ; drive++) {
 		if (!(bh = bread(0x300 + drive*5,0))) {
 			printk("Unable to read partition table of drive %d\n\r",
@@ -108,7 +151,9 @@ int sys_setup(void * BIOS)
 		}
 		brelse(bh);
 	}
-	printk("Partition table%s ok.\n\r",(NR_HD>1)?"s":"");
+	if (NR_HD)
+		printk("Partition table%s ok.\n\r",(NR_HD>1)?"s":"");
+	rd_load();
 	mount_root();
 	return (0);
 }
@@ -213,8 +258,10 @@ static void read_intr(void)
 	CURRENT->errors = 0;
 	CURRENT->buffer += 512;
 	CURRENT->sector++;
-	if (--CURRENT->nr_sectors)
+	if (--CURRENT->nr_sectors) {
+		do_hd = &read_intr;
 		return;
+	}
 	end_request(1);
 	do_hd_request();
 }
@@ -229,6 +276,7 @@ static void write_intr(void)
 	if (--CURRENT->nr_sectors) {
 		CURRENT->sector++;
 		CURRENT->buffer += 512;
+		do_hd = &write_intr;
 		port_write(HD_DATA,CURRENT->buffer,256);
 		return;
 	}
