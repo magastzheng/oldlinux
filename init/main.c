@@ -156,7 +156,7 @@ static char * envp[] = { "HOME=/usr/root", NULL };
 
 void init(void)
 {
-	int i,j;
+	int pid,i;
 
 	setup((void *) &drive_info);
 	if (!fork())
@@ -168,18 +168,24 @@ void init(void)
 		NR_BUFFERS*BLOCK_SIZE);
 	printf("Free mem: %d bytes\n\r",memory_end-buffer_memory_end);
 	printf(" Ok.\n\r");
-	if ((i=fork())<0)
-		printf("Fork failed in init\r\n");
-	else if (!i) {
-		close(0);close(1);close(2);
-		setsid();
-		(void) open("/dev/tty0",O_RDWR,0);
-		(void) dup(0);
-		(void) dup(0);
-		_exit(execve("/bin/sh",argv,envp));
+	while (1) {
+		if ((pid=fork())<0) {
+			printf("Fork failed in init\r\n");
+			continue;
+		}
+		if (!pid) {
+			close(0);close(1);close(2);
+			setsid();
+			(void) open("/dev/tty0",O_RDWR,0);
+			(void) dup(0);
+			(void) dup(0);
+			_exit(execve("/bin/sh",argv,envp));
+		}
+		while (1)
+			if (pid == wait(&i))
+				break;
+		printf("\n\rchild %d died with code %04x\n\r",pid,i);
+		sync();
 	}
-	j=wait(&i);
-	printf("child %d died with code %04x\n",j,i);
-	sync();
 	_exit(0);	/* NOTE! _exit, not exit() */
 }

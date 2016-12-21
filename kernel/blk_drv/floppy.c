@@ -5,6 +5,21 @@
  */
 
 /*
+ * 02.12.91 - Changed to static variables to indicate need for reset
+ * and recalibrate. This makes some things easier (output_byte reset
+ * checking etc), and means less interrupt jumping in case of errors,
+ * so the code is hopefully easier to understand.
+ */
+
+/*
+ * This file is certainly a mess. I've tried my best to get it working,
+ * but I don't like programming floppies, and I have only one anyway.
+ * Urgel. I should check for more errors, and do more graceful error
+ * recovery. Seems there are problems with several drives. I've tried to
+ * correct them. No promises. 
+ */
+
+/*
  * As with hd.c, all routines within this file can (and will) be called
  * by interrupts, so extreme caution is needed. A hardware interrupt
  * handler may not sleep, or a kernel panic will happen. Thus I cannot
@@ -26,12 +41,10 @@
 #define MAJOR_NR 2
 #include "blk.h"
 
-static void reset_floppy(void);
-static void seek_interrupt(void);
-static void rw_interrupt(void);
+static int recalibrate = 0;
+static int reset = 0;
 
 extern unsigned char current_DOR;
-extern unsigned char selected;
 
 #define immoutb_p(val,port) \
 __asm__("outb %0,%1\n\tjmp 1f\n1:\tjmp 1f\n1:"::"a" ((char) (val)),"i" (port))
@@ -39,11 +52,11 @@ __asm__("outb %0,%1\n\tjmp 1f\n1:\tjmp 1f\n1:"::"a" ((char) (val)),"i" (port))
 #define TYPE(x) ((x)>>2)
 #define DRIVE(x) ((x)&0x03)
 /*
- * Note that MAX_ERRORS=10 doesn't imply that we retry every bad read
- * max 10 times - some types of errors increase the errorcount by 2,
- * so we might actually retry only 6-7 times before giving up.
+ * Note that MAX_ERRORS=8 doesn't imply that we retry every bad read
+ * max 8 times - some types of errors increase the errorcount by 2,
+ * so we might actually retry only 5-6 times before giving up.
  */
-#define MAX_ERRORS 10
+#define MAX_ERRORS 8
 
 /*
  * globals used by 'result()'
@@ -58,14 +71,15 @@ static unsigned char reply_buffer[MAX_REPLIES];
 /*
  * This struct defines the different floppy types. Unlike minix
  * linux doesn't have a "search for right type"-type, as the code
- * for that is convoluted and weird.
+ * for that is convoluted and weird. I've got enough problems with
+ * this driver as it is.
  *
  * The 'stretch' tells if the tracks need to be boubled for some
  * types (ie 360kB diskette in 1.2MB drive etc). Others should
  * be self-explanatory.
  */
 static struct floppy_struct {
-	int size, sect, head, track, stretch;
+	unsigned int size, sect, head, track, stretch;
 	unsigned char gap,rate,spec1;
 } floppy_type[] = {
 	{    0, 0,0, 0,0,0x00,0x00,0x00 },	/* no testing */
@@ -103,15 +117,31 @@ static unsigned char head = 0;
 static unsigned char track = 0;
 static unsigned char seek_track = 0;
 static unsigned char command = 0;
+unsigned char selected = 0;
+struct task_struct * wait_on_floppy_select = NULL;
+
+void floppy_deselect(unsigned int nr)
+{
+	if (nr != (current_DOR & 3))
+		printk("floppy_deselect: drive not selected\n\r");
+	selected = 0;
+	wake_up(&wait_on_floppy_select);
+}
 
 /*
  * floppy-change is never called from an interrupt, so we can relax a bit
- * here.
+ * here, sleep etc. Note that floppy-on tries to set current_DOR to point
+ * to the desired drive, but it will probably not survive the sleep if
+ * several floppies are used at the same time: thus the loop.
  */
 int floppy_change(unsigned int nr)
 {
+repeat:
 	floppy_on(nr);
-	floppy_select(nr);
+	while ((current_DOR & 3) != nr && selected)
+		interruptible_sleep_on(&wait_on_floppy_select);
+	if ((current_DOR & 3) != nr)
+		goto repeat;
 	if (inb(FD_DIR) & 0x80) {
 		floppy_off(nr);
 		return 1;
@@ -162,13 +192,16 @@ static void output_byte(char byte)
 	int counter;
 	unsigned char status;
 
+	if (reset)
+		return;
 	for(counter = 0 ; counter < 10000 ; counter++) {
-		status = inb(FD_STATUS) & (STATUS_READY | STATUS_DIR);
+		status = inb_p(FD_STATUS) & (STATUS_READY | STATUS_DIR);
 		if (status == STATUS_READY) {
 			outb(byte,FD_DATA);
 			return;
 		}
 	}
+	reset = 1;
 	printk("Unable to send byte to FDC\n\r");
 }
 
@@ -176,18 +209,56 @@ static int result(void)
 {
 	int i = 0, counter, status;
 
+	if (reset)
+		return -1;
 	for (counter = 0 ; counter < 10000 ; counter++) {
-		status = inb(FD_STATUS)&(STATUS_DIR|STATUS_READY|STATUS_BUSY);
+		status = inb_p(FD_STATUS)&(STATUS_DIR|STATUS_READY|STATUS_BUSY);
 		if (status == STATUS_READY)
 			return i;
 		if (status == (STATUS_DIR|STATUS_READY|STATUS_BUSY)) {
 			if (i >= MAX_REPLIES)
 				break;
-			reply_buffer[i++] = inb(FD_DATA);
+			reply_buffer[i++] = inb_p(FD_DATA);
 		}
 	}
+	reset = 1;
 	printk("Getstatus times out\n\r");
 	return -1;
+}
+
+static void bad_flp_intr(void)
+{
+	CURRENT->errors++;
+	if (CURRENT->errors > MAX_ERRORS) {
+		floppy_deselect(current_drive);
+		end_request(0);
+	}
+	if (CURRENT->errors > MAX_ERRORS/2)
+		reset = 1;
+	else
+		recalibrate = 1;
+}	
+
+/*
+ * Ok, this interrupt is called after a DMA read/write has succeeded,
+ * so we check the results, and copy any buffers.
+ */
+static void rw_interrupt(void)
+{
+	if (result() != 7 || (ST0 & 0xf8) || (ST1 & 0xbf) || (ST2 & 0x73)) {
+		if (ST1 & 0x02) {
+			printk("Drive %d is write protected\n\r",current_drive);
+			CURRENT->errors = MAX_ERRORS;
+		}
+		bad_flp_intr();
+		do_fd_request();
+		return;
+	}
+	if (command == FD_READ && (long)(CURRENT->buffer) >= 0x100000)
+		copy_buffer(tmp_floppy_area,CURRENT->buffer);
+	floppy_deselect(current_drive);
+	end_request(1);
+	do_fd_request();
 }
 
 /*
@@ -199,30 +270,9 @@ static void seek_interrupt(void)
 {
 /* sense drive status */
 	output_byte(FD_SENSEI);
-	if (result() != 2 || (ST0 & 0xF8) != 0x20) {
-		CURRENT->errors++;
-		if (CURRENT->errors > MAX_ERRORS) {
-			floppy_deselect(current_drive);
-			end_request(0);
-			reset_floppy();
-			return;
-		}
-		output_byte(FD_RECALIBRATE);
-		output_byte(head<<2 | current_drive);
-		return;
-	}
-/* are we on the right track? */
-	if (ST1 != seek_track) {
-		CURRENT->errors++;
-		if (CURRENT->errors > MAX_ERRORS) {
-			floppy_deselect(current_drive);
-			end_request(0);
-			reset_floppy();
-			return;
-		}
-		output_byte(FD_SEEK);
-		output_byte(head<<2 | current_drive);
-		output_byte(seek_track);
+	if (result() != 2 || (ST0 & 0xF8) != 0x20 || ST1 != seek_track) {
+		bad_flp_intr();
+		do_fd_request();
 		return;
 	}
 /* yes - set up DMA and read/write command */
@@ -237,36 +287,8 @@ static void seek_interrupt(void)
 	output_byte(floppy->sect);
 	output_byte(floppy->gap);
 	output_byte(0xFF);	/* sector size (0xff when n!=0 ?) */
-}
-
-/*
- * Ok, this interrupt is called after a DMA read/write has succeeded,
- * so we check the results, and copy any buffers.
- */
-static void rw_interrupt(void)
-{
-	if (result() != 7 || (ST0 & 0xf8) || (ST1 & 0xbf) ||
-	    (ST2 & 0x73)) {
-		CURRENT->errors++;
-		if (CURRENT->errors > MAX_ERRORS || (ST1 & 0x02)) {
-			if (ST1 & 0x02)
-				printk("Drive %d is write protected\n\r",
-				current_drive);
-			floppy_deselect(current_drive);
-			end_request(0);
-			do_fd_request();
-			return;
-		}
-		do_floppy = seek_interrupt;
-		output_byte(FD_RECALIBRATE);
-		output_byte(head<<2 | current_drive);
-		return;
-	}
-	if (command == FD_READ && (long)(CURRENT->buffer) >= 0x100000)
-		copy_buffer(tmp_floppy_area,CURRENT->buffer);
-	floppy_deselect(current_drive);
-	end_request(1);
-	do_fd_request();
+	if (reset)
+		do_fd_request();
 }
 
 /*
@@ -293,6 +315,8 @@ static void transfer(void)
 		output_byte(FD_RECALIBRATE);
 		output_byte(head<<2 | current_drive);
 	}
+	if (reset)
+		do_fd_request();
 }
 
 /*
@@ -302,10 +326,10 @@ static void recal_interrupt(void)
 {
 	do_floppy = NULL;
 	output_byte(FD_SENSEI);
-	if (result()!=2 || (ST0 & 0xE0) == 0x60) {
-		reset_floppy();
-		return;
-	}
+	if (result()!=2 || (ST0 & 0xE0) == 0x60)
+		reset = 1;
+	else
+		recalibrate = 0;
 	do_fd_request();
 }
 
@@ -313,12 +337,14 @@ void unexpected_floppy_interrupt(void)
 {
 	output_byte(FD_SENSEI);
 	if (result()!=2 || (ST0 & 0xE0) == 0x60) {
-		reset_floppy();
-		return;
+		reset = 1;
+		do_fd_request();
 	}
 	do_floppy = recal_interrupt;
 	output_byte(FD_RECALIBRATE);
 	output_byte(head<<2 | current_drive);
+	if (reset)
+		do_fd_request();
 }
 
 static void reset_interrupt(void)
@@ -328,13 +354,33 @@ static void reset_interrupt(void)
 	do_floppy = recal_interrupt;
 	output_byte(FD_RECALIBRATE);
 	output_byte(head<<2 | current_drive);
+	if (reset)
+		do_fd_request();
+}
+
+static void recalibrate_floppy(void)
+{
+	recalibrate = 0;
+	do_floppy = recal_interrupt;
+	output_byte(FD_RECALIBRATE);
+	output_byte(head<<2 | current_drive);
+	if (reset)
+		do_fd_request();
 }
 
 static void reset_floppy(void)
 {
+	int i;
+
+	reset = 0;
+	cur_spec1 = -1;
+	cur_rate = -1;
+	recalibrate = 1;
 	printk("Reset-floppy called\n\r");
 	do_floppy = reset_interrupt;
 	outb_p(0,FD_DOR);
+	for (i=0 ; i<10 ; i++)
+		__asm__("nop");
 	outb(current_DOR,FD_DOR);
 }
 
@@ -342,9 +388,13 @@ static void floppy_on_interrupt(void)
 {
 /* We cannot do a floppy-select, as that might sleep. We just force it */
 	selected = 1;
-	current_DOR &= 0xFC;
-	current_DOR |= current_drive;
-	transfer();
+	if (current_drive != (current_DOR & 3)) {
+		current_DOR &= 0xFC;
+		current_DOR |= current_drive;
+		outb(current_DOR,FD_DOR);
+		add_timer(2,&transfer);
+	} else
+		transfer();
 }
 
 void do_fd_request(void)
@@ -358,6 +408,14 @@ void do_fd_request(void)
 	if (block+2 > floppy->size) {
 		end_request(0);
 		goto repeat;
+	}
+	if (reset) {
+		reset_floppy();
+		return;
+	}
+	if (recalibrate) {
+		recalibrate_floppy();
+		return;
 	}
 	sector = block % floppy->sect;
 	block /= floppy->sect;
@@ -377,6 +435,6 @@ void do_fd_request(void)
 void floppy_init(void)
 {
 	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
-	set_intr_gate(0x26,&floppy_interrupt);
+	set_trap_gate(0x26,&floppy_interrupt);
 	outb(inb_p(0x21)&~0x40,0x21);
 }

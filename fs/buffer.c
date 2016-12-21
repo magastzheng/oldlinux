@@ -194,8 +194,7 @@ struct buffer_head * get_hash_table(int dev, int block)
  * race-conditions. Most of the code is seldom used, (ie repeating),
  * so it should be much more efficient than it looks.
  *
- * The algoritm is changed: better, and an elusive bug removed.
- *		LBT 11.11.91
+ * The algoritm is changed: hopefully better, and an elusive bug removed.
  */
 #define BADNESS(bh) (((bh)->b_dirt<<1)+(bh)->b_lock)
 struct buffer_head * getblk(int dev,int block)
@@ -214,6 +213,7 @@ repeat:
 			if (!BADNESS(tmp))
 				break;
 		}
+/* and repeat until we find something good */
 	} while ((tmp = tmp->b_next_free) != free_list);
 	if (!bh) {
 		sleep_on(&buffer_wait);
@@ -272,6 +272,40 @@ struct buffer_head * bread(int dev,int block)
 		return bh;
 	brelse(bh);
 	return NULL;
+}
+
+#define COPYBLK(from,to) \
+__asm__("cld\n\t" \
+	"rep\n\t" \
+	"movsl\n\t" \
+	::"c" (BLOCK_SIZE/4),"S" (from),"D" (to) \
+	:"cx","di","si")
+
+/*
+ * bread_page reads four buffers into memory at the desired address. It's
+ * a function of its own, as there is some speed to be got by reading them
+ * all at the same time, not waiting for one to be read, and then another
+ * etc.
+ */
+void bread_page(unsigned long address,int dev,int b[4])
+{
+	struct buffer_head * bh[4];
+	int i;
+
+	for (i=0 ; i<4 ; i++)
+		if (b[i]) {
+			if (bh[i] = getblk(dev,b[i]))
+				if (!bh[i]->b_uptodate)
+					ll_rw_block(READ,bh[i]);
+		} else
+			bh[i] = NULL;
+	for (i=0 ; i<4 ; i++,address += BLOCK_SIZE)
+		if (bh[i]) {
+			wait_on_buffer(bh[i]);
+			if (bh[i]->b_uptodate)
+				COPYBLK((unsigned long) bh[i]->b_data,address);
+			brelse(bh[i]);
+		}
 }
 
 /*

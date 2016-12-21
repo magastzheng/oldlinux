@@ -24,8 +24,13 @@
 #include "blk.h"
 
 /* Max read/write errors/sector */
-#define MAX_ERRORS	5
+#define MAX_ERRORS	7
 #define MAX_HD		2
+
+static void recal_intr(void);
+
+static int recalibrate = 1;
+static int reset = 1;
 
 /*
  *  This struct defines the HD's and their types.
@@ -110,15 +115,15 @@ int sys_setup(void * BIOS)
 
 static int controller_ready(void)
 {
-	int retries=1000;
+	int retries=10000;
 
-	while (--retries && (inb(HD_STATUS)&0xc0)!=0x40);
+	while (--retries && (inb_p(HD_STATUS)&0xc0)!=0x40);
 	return (retries);
 }
 
 static int win_result(void)
 {
-	int i=inb(HD_STATUS);
+	int i=inb_p(HD_STATUS);
 
 	if ((i & (BUSY_STAT | READY_STAT | WRERR_STAT | SEEK_STAT | ERR_STAT))
 		== (READY_STAT | SEEK_STAT))
@@ -138,7 +143,7 @@ static void hd_out(unsigned int drive,unsigned int nsect,unsigned int sect,
 	if (!controller_ready())
 		panic("HD controller not ready");
 	do_hd = intr_addr;
-	outb(hd_info[drive].ctl,HD_CMD);
+	outb_p(hd_info[drive].ctl,HD_CMD);
 	port=HD_DATA;
 	outb_p(hd_info[drive].wpcom>>2,++port);
 	outb_p(nsect,++port);
@@ -153,8 +158,8 @@ static int drive_busy(void)
 {
 	unsigned int i;
 
-	for (i = 0; i < 100000; i++)
-		if (READY_STAT == (inb(HD_STATUS) & (BUSY_STAT | READY_STAT)))
+	for (i = 0; i < 10000; i++)
+		if (READY_STAT == (inb_p(HD_STATUS) & (BUSY_STAT|READY_STAT)))
 			break;
 	i = inb(HD_STATUS);
 	i &= BUSY_STAT | READY_STAT | SEEK_STAT;
@@ -169,26 +174,19 @@ static void reset_controller(void)
 	int	i;
 
 	outb(4,HD_CMD);
-	for(i = 0; i < 1000; i++) nop();
-	outb(0,HD_CMD);
-	for(i = 0; i < 10000 && drive_busy(); i++) /* nothing */;
+	for(i = 0; i < 100; i++) nop();
+	outb(hd_info[0].ctl & 0x0f ,HD_CMD);
 	if (drive_busy())
 		printk("HD-controller still busy\n\r");
-	if((i = inb(ERR_STAT)) != 1)
+	if ((i = inb(HD_ERROR)) != 1)
 		printk("HD-controller reset failed: %02x\n\r",i);
-}
-
-static void redo_hd_request(void)
-{
-	do_hd = NULL;
-	do_hd_request();
 }
 
 static void reset_hd(int nr)
 {
 	reset_controller();
 	hd_out(nr,hd_info[nr].sect,hd_info[nr].sect,hd_info[nr].head-1,
-		hd_info[nr].cyl,WIN_SPECIFY,&redo_hd_request);
+		hd_info[nr].cyl,WIN_SPECIFY,&recal_intr);
 }
 
 void unexpected_hd_interrupt(void)
@@ -198,17 +196,17 @@ void unexpected_hd_interrupt(void)
 
 static void bad_rw_intr(void)
 {
-	int i = CURRENT_DEV;
-
-	if (CURRENT->errors++ >= MAX_ERRORS)
+	if (++CURRENT->errors >= MAX_ERRORS)
 		end_request(0);
-	reset_hd(i);
+	if (CURRENT->errors > MAX_ERRORS/2)
+		reset = 1;
 }
 
 static void read_intr(void)
 {
 	if (win_result()) {
 		bad_rw_intr();
+		do_hd_request();
 		return;
 	}
 	port_read(HD_DATA,CURRENT->buffer,256);
@@ -225,6 +223,7 @@ static void write_intr(void)
 {
 	if (win_result()) {
 		bad_rw_intr();
+		do_hd_request();
 		return;
 	}
 	if (--CURRENT->nr_sectors) {
@@ -234,6 +233,13 @@ static void write_intr(void)
 		return;
 	}
 	end_request(1);
+	do_hd_request();
+}
+
+static void recal_intr(void)
+{
+	if (win_result())
+		bad_rw_intr();
 	do_hd_request();
 }
 
@@ -259,13 +265,25 @@ void do_hd_request(void)
 		"r" (hd_info[dev].head));
 	sec++;
 	nsect = CURRENT->nr_sectors;
+	if (reset) {
+		reset = 0;
+		recalibrate = 1;
+		reset_hd(CURRENT_DEV);
+		return;
+	}
+	if (recalibrate) {
+		recalibrate = 0;
+		hd_out(dev,hd_info[CURRENT_DEV].sect,0,0,0,
+			WIN_RESTORE,&recal_intr);
+		return;
+	}	
 	if (CURRENT->cmd == WRITE) {
 		hd_out(dev,nsect,sec,head,cyl,WIN_WRITE,&write_intr);
 		for(i=0 ; i<3000 && !(r=inb_p(HD_STATUS)&DRQ_STAT) ; i++)
 			/* nothing */ ;
 		if (!r) {
-			reset_hd(CURRENT_DEV);
-			return;
+			bad_rw_intr();
+			goto repeat;
 		}
 		port_write(HD_DATA,CURRENT->buffer,256);
 	} else if (CURRENT->cmd == READ) {
@@ -277,7 +295,7 @@ void do_hd_request(void)
 void hd_init(void)
 {
 	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
-	set_trap_gate(0x2E,&hd_interrupt);
+	set_intr_gate(0x2E,&hd_interrupt);
 	outb_p(inb_p(0x21)&0xfb,0x21);
 	outb(inb_p(0xA1)&0xbf,0xA1);
 }
