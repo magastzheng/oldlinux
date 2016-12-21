@@ -18,6 +18,11 @@
 #include <linux/head.h>
 #include <linux/unistd.h>
 
+extern unsigned long * prof_buffer;
+extern unsigned long prof_len;
+extern int end;
+extern char *linux_banner;
+
 /*
  * we need this inline - forking from kernel space will result
  * in NO COPY ON WRITE (!!!), until an execve is executed. This
@@ -30,6 +35,7 @@
  * won't be any messing with the stack from main(), but we define
  * some others too.
  */
+static inline _syscall0(int,idle)
 static inline _syscall0(int,fork)
 static inline _syscall0(int,pause)
 static inline _syscall1(int,setup,void *,BIOS)
@@ -54,11 +60,11 @@ extern void init(void);
 extern void init_IRQ(void);
 extern long blk_dev_init(long,long);
 extern long chr_dev_init(long,long);
-extern void hd_init(void);
 extern void floppy_init(void);
 extern void sock_init(void);
 extern long rd_init(long mem_start, int length);
 extern long kernel_mktime(struct tm * tm);
+extern void malloc_grab_pages(void);
 
 #ifdef CONFIG_SCSI
 extern void scsi_dev_init(void);
@@ -82,6 +88,7 @@ static int sprintf(char * str, const char *fmt, ...)
 #define DRIVE_INFO (*(struct drive_info *)0x90080)
 #define SCREEN_INFO (*(struct screen_info *)0x90000)
 #define ORIG_ROOT_DEV (*(unsigned short *)0x901FC)
+#define AUX_DEVICE_INFO (*(unsigned char *)0x901FF)
 
 /*
  * Yeah, yeah, it's ugly, but I cannot find how to do this correctly
@@ -119,8 +126,10 @@ static void time_init(void)
 	startup_time = kernel_mktime(&time);
 }
 
-static unsigned long memory_start = 0;
+static unsigned long memory_start = 0; /* After mem_init, stores the */
+				       /* amount of free user memory */
 static unsigned long memory_end = 0;
+static unsigned long low_memory_start = 0;
 
 static char term[32];
 
@@ -136,6 +145,8 @@ static char * envp[] = { "HOME=/usr/root", NULL, NULL };
 struct drive_info { char dummy[32]; } drive_info;
 struct screen_info screen_info;
 
+unsigned char aux_device_present;
+
 void start_kernel(void)
 {
 /*
@@ -145,6 +156,7 @@ void start_kernel(void)
  	ROOT_DEV = ORIG_ROOT_DEV;
  	drive_info = DRIVE_INFO;
  	screen_info = SCREEN_INFO;
+	aux_device_present = AUX_DEVICE_INFO;
 	sprintf(term, "TERM=con%dx%d", ORIG_VIDEO_COLS, ORIG_VIDEO_LINES);
 	envp[1] = term;	
 	envp_rc[1] = term;
@@ -154,26 +166,34 @@ void start_kernel(void)
 	if (memory_end > 16*1024*1024)
 		memory_end = 16*1024*1024;
 	memory_start = 1024*1024;
+	low_memory_start = (unsigned long) &end;
+	low_memory_start += 0xfff;
+	low_memory_start &= 0xfffff000;
 	trap_init();
 	init_IRQ();
 	sched_init();
+#ifdef PROFILE_SHIFT
+	prof_buffer = (unsigned long *) memory_start;
+	prof_len = (unsigned long) &end;
+	prof_len >>= PROFILE_SHIFT;
+	memory_start += prof_len * sizeof(unsigned long);
+#endif
 	memory_start = chr_dev_init(memory_start,memory_end);
 	memory_start = blk_dev_init(memory_start,memory_end);
-	memory_start = mem_init(memory_start,memory_end);
+	mem_init(low_memory_start,memory_start,memory_end);
 	buffer_init();
 	time_init();
-	printk("Linux version " UTS_RELEASE " " __DATE__ " " __TIME__ "\n");
-	hd_init();
 	floppy_init();
+	malloc_grab_pages();
 	sock_init();
 	sti();
 #ifdef CONFIG_SCSI
 	scsi_dev_init();
 #endif
+	sti();
 	move_to_user_mode();
-	if (!fork()) {		/* we count on this going ok */
+	if (!fork())		/* we count on this going ok */
 		init();
-	}
 /*
  * task[0] is meant to be used as an "idle" task: it may not sleep, but
  * it might do some general things like count free pages or it could be
@@ -181,10 +201,10 @@ void start_kernel(void)
  * anything that can be useful, but shouldn't take time from the real
  * processes.
  *
- * Right now task[0] just does a infinite loop in user mode.
+ * Right now task[0] just does a infinite idle loop.
  */
 	for(;;)
-		/* nothing */ ;
+		idle();
 }
 
 static int printf(const char *fmt, ...)
@@ -206,10 +226,8 @@ void init(void)
 	(void) open("/dev/tty1",O_RDWR,0);
 	(void) dup(0);
 	(void) dup(0);
-	printf("%d buffers = %d bytes buffer space\n\r",nr_buffers,
-		nr_buffers*BLOCK_SIZE);
-	printf("Free mem: %d bytes\n\r",memory_end-memory_start);
 
+	printf(linux_banner);
 	execve("/etc/init",argv_init,envp_init);
 	execve("/bin/init",argv_init,envp_init);
 	/* if this fails, fall through to original stuff */

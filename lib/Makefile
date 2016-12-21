@@ -39,8 +39,9 @@ execve.o : execve.c /usr/src/linux/include/linux/unistd.h
 malloc.o : malloc.c /usr/src/linux/include/linux/kernel.h /usr/src/linux/include/linux/mm.h \
   /usr/src/linux/include/linux/fs.h /usr/src/linux/include/linux/limits.h /usr/src/linux/include/linux/wait.h \
   /usr/src/linux/include/linux/types.h /usr/src/linux/include/linux/dirent.h /usr/src/linux/include/linux/vfs.h \
-  /usr/src/linux/include/linux/minix_fs_sb.h /usr/src/linux/include/linux/ext_fs_sb.h \
-  /usr/src/linux/include/linux/msdos_fs_sb.h /usr/src/linux/include/linux/signal.h \
+  /usr/src/linux/include/linux/minix_fs_i.h /usr/src/linux/include/linux/ext_fs_i.h \
+  /usr/src/linux/include/linux/msdos_fs_i.h /usr/src/linux/include/linux/minix_fs_sb.h \
+  /usr/src/linux/include/linux/ext_fs_sb.h /usr/src/linux/include/linux/msdos_fs_sb.h \
   /usr/src/linux/include/asm/system.h 
 open.o : open.c /usr/src/linux/include/linux/unistd.h /usr/src/linux/include/stdarg.h 
 setsid.o : setsid.c /usr/src/linux/include/linux/types.h /usr/src/linux/include/linux/unistd.h 
